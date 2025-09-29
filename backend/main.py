@@ -21,7 +21,7 @@ class Message(BaseModel):
     user_port: Optional[int] = None
 
 # Configuración
-ADMIN_PASSWORD = "admin123"  # Cambiar por una contraseña segura
+ADMIN_PASSWORD = "admin123" 
 
 app = FastAPI()
 

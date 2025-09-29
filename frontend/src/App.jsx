@@ -3,8 +3,8 @@ import { Send, Lock, Eye, EyeOff } from 'lucide-react';
 
 const ChatApp = () => {
   // Configuración del servidor - CAMBIA ESTA IP POR LA DE TU PC
-  //const SERVER_IP = 'localhost'; 
-  const SERVER_IP = '192.168.1.64';//Aqui ponen su ip de la pc PARA ACCEDER DESDE EL CELULAR
+  const SERVER_IP = 'localhost'; 
+  //const SERVER_IP = '192.168.1.64';//Aqui ponen su ip de la pc PARA ACCEDER DESDE EL CELULAR
   const SERVER_PORT = '8000';
   
   // Estados principales
@@ -186,9 +186,10 @@ const ChatApp = () => {
                   Entrar
                 </button>
               </div>
+              {/*
               <p className="text-sm text-red-600 mt-2">
                 Contraseña por defecto: admin123
-              </p>
+              </p> */}
             </div>
           )}
         </div>
