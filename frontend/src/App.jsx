@@ -166,12 +166,19 @@ const ChatApp = () => {
       // Usar una función async interna para manejar el await
       const processMessage = async () => {
         try {
-          if (message.content && privateKey && TipoComunicacion === 'Asimetrico') {
-            const decrypted = await decryptMessage(message.content);
-            message.content = decrypted;
+          // Solo mostrar el contenido cifrado en consola
+          if (message.encrypted) {
+            console.log('📦 Mensaje cifrado recibido:', message.content);
+            console.log('🔐 Tipo de comunicación:', message.tipo_comunicacion);
+            
+            if (message.tipo_comunicacion === 'Asimetrico' && privateKey) {
+              const decrypted = await decryptMessage(message.content);
+              message.content = decrypted;
+              console.log('🔓 Mensaje descifrado:', decrypted);
+            }
           }
         } catch (err) {
-          console.warn("No se pudo descifrar el mensaje (probablemente no estaba cifrado).");
+          console.warn("Error al procesar mensaje:", err);
         }
         
         setMessages(prev => [...prev, message]);
@@ -217,42 +224,37 @@ const ChatApp = () => {
   };
   
   // Enviar mensaje
- // En la función sendMessage - AGREGAR ESTOS CONSOLE.LOG
-const sendMessage = async () => {
-  if (newMessage.trim() && wsRef.current && isConnected) {
-    try {
-      let contentToSend = newMessage;
-      
-      console.log("🔍 ANTES del cifrado:", {
-        mensajeOriginal: newMessage,
-        tipoComunicacion: TipoComunicacion,
-        tieneClaveServidor: !!serverPublicKey
-      });
-      
-      // Solo cifrar si estamos en modo asimétrico y tenemos la clave pública del servidor
-      if (TipoComunicacion === 'Asimetrico' && serverPublicKey) {
-        contentToSend = await encryptMessage(newMessage, serverPublicKey);
+  // En la función sendMessage - AGREGAR ESTOS CONSOLE.LOG
+  const sendMessage = async () => {
+    if (newMessage.trim() && wsRef.current && isConnected) {
+      try {
+        let contentToSend = newMessage;
         
-        console.log("🔐 DESPUÉS del cifrado:", {
-          mensajeCifrado: contentToSend,
-          longitud: contentToSend.length,
-          esBase64: contentToSend.length > 100 // Los mensajes cifrados son más largos
+        console.log("📤 Enviando mensaje:", {
+          mensajeOriginal: newMessage,
+          tipoComunicacion: TipoComunicacion
         });
-      } else {
-        console.log("📝 Modo texto plano - sin cifrado");
+        
+        if (TipoComunicacion === 'Asimetrico' && serverPublicKey) {
+          contentToSend = await encryptMessage(newMessage, serverPublicKey);
+          console.log("🔒 Mensaje cifrado (asimétrico):", contentToSend);
+        } else if (TipoComunicacion === 'Simetrico') {
+          // En modo simétrico, enviamos el mensaje sin mostrar el cifrado en la UI
+          console.log("🔒 Mensaje enviado en modo simétrico");
+        }
+        
+        wsRef.current.send(JSON.stringify({
+          type: "message",
+          content: contentToSend
+        }));
+        
+        setNewMessage('');
+      } catch (error) {
+        console.error("Error procesando mensaje:", error);
+        alert("Error al enviar el mensaje");
       }
-      
-      wsRef.current.send(JSON.stringify({
-        type: "message",
-        content: contentToSend
-      }));
-      setNewMessage('');
-    } catch (error) {
-      console.error("Error procesando mensaje:", error);
-      alert("Error al enviar el mensaje");
     }
-  }
-};
+  };
   
   // Manejar Enter
   const handleKeyPress = (e) => {

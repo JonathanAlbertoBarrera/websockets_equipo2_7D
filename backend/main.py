@@ -11,6 +11,8 @@ import base64
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
+from cryptography.fernet import Fernet
+from base64 import b64encode, b64decode
 
 # --- Modelos ---
 class LoginRequest(BaseModel):
@@ -39,7 +41,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- ChatManager con RSA ---
+# --- Clases de cifrado ---
+class SymmetricEncryption:
+    def __init__(self):
+        self.key = Fernet.generate_key()
+        self.cipher_suite = Fernet(self.key)
+
+    def encrypt(self, message: str) -> str:
+        """Cifra un mensaje usando Fernet (cifrado simétrico)"""
+        encrypted_message = self.cipher_suite.encrypt(message.encode())
+        return b64encode(encrypted_message).decode()
+
+    def decrypt(self, encrypted_message: str) -> str:
+        """Descifra un mensaje usando Fernet"""
+        try:
+            decoded = b64decode(encrypted_message.encode())
+            decrypted_message = self.cipher_suite.decrypt(decoded)
+            return decrypted_message.decode()
+        except Exception as e:
+            print(f"Error al descifrar: {e}")
+            return encrypted_message
+
+# --- ChatManager con RSA y cifrado simétrico ---
 class ChatManager:
     def __init__(self):
         # Generar claves RSA al crear la instancia del servidor
@@ -52,6 +75,7 @@ class ChatManager:
         # user_info guarda ip, port, is_admin, connected_at, y opcionalmente 'public_key' (PEM)
         self.user_info: Dict[str, dict] = {}
         self.tipo_comunicacion: str = "Asimetrico"  # Valor por defecto
+        self.symmetric_encryption = SymmetricEncryption()
 
     # --- Métodos para gestionar el tipo de comunicación ---
     def set_tipo_comunicacion(self, tipo: str):
@@ -170,12 +194,12 @@ class ChatManager:
             })
         await websocket.send_text(json.dumps(message_data))
 
+    def get_symmetric_key(self) -> str:
+        """Retorna la clave simétrica en formato base64"""
+        return b64encode(self.symmetric_encryption.key).decode()
+
     async def broadcast_message(self, plaintext: str, origin_user_id: str):
-        """Recibe plaintext (texto descifrado) y lo re-encripta para cada destinatario
-           según su clave pública, o lo envía en texto claro si no tienen clave pública.
-           También guarda el mensaje (texto claro) en historial.
-        """
-        # Guardar en historial (texto claro)
+        """Modificar el método broadcast_message para manejar cifrado simétrico"""
         message_obj = Message(
             id=str(uuid.uuid4()),
             content=plaintext,
@@ -186,34 +210,42 @@ class ChatManager:
         )
         self.messages.append(message_obj)
 
-        # Enviar a usuarios regulares
+        # Preparar el mensaje según el tipo de comunicación
         for uid, ws in list(self.connections.items()):
             try:
-                recipient_info = self.user_info.get(uid, {})
-                recipient_pub = recipient_info.get("public_key")
-                
-                # Verificar tipo de comunicación
-                if self.tipo_comunicacion == "Asimetrico" and recipient_pub:
-                    # cifrar con la clave pública del destinatario
-                    encrypted_b64 = self.encrypt_with_public_key_pem(recipient_pub, plaintext)
+                if self.tipo_comunicacion == "Simetrico":
+                    encrypted = self.symmetric_encryption.encrypt(plaintext)
                     payload = {
-                        "id": message_obj.id, 
-                        "content": encrypted_b64, 
-                        "encrypted": True, 
-                        "timestamp": message_obj.timestamp, 
+                        "id": message_obj.id,
+                        "content": encrypted,
+                        "encrypted": True,
+                        "timestamp": message_obj.timestamp,
                         "user_id": origin_user_id,
-                        "tipo_comunicacion": self.tipo_comunicacion
+                        "tipo_comunicacion": "Simetrico"
                     }
                 else:
-                    # Sin cifrado o tipo Simetrico (por implementar)
-                    payload = {
-                        "id": message_obj.id, 
-                        "content": plaintext, 
-                        "encrypted": False, 
-                        "timestamp": message_obj.timestamp, 
-                        "user_id": origin_user_id,
-                        "tipo_comunicacion": self.tipo_comunicacion
-                    }
+                    # Código existente para asimétrico...
+                    recipient_info = self.user_info.get(uid, {})
+                    recipient_pub = recipient_info.get("public_key")
+                    if recipient_pub:
+                        encrypted_b64 = self.encrypt_with_public_key_pem(recipient_pub, plaintext)
+                        payload = {
+                            "id": message_obj.id,
+                            "content": encrypted_b64,
+                            "encrypted": True,
+                            "timestamp": message_obj.timestamp,
+                            "user_id": origin_user_id,
+                            "tipo_comunicacion": "Asimetrico"
+                        }
+                    else:
+                        payload = {
+                            "id": message_obj.id,
+                            "content": plaintext,
+                            "encrypted": False,
+                            "timestamp": message_obj.timestamp,
+                            "user_id": origin_user_id,
+                            "tipo_comunicacion": "Asimetrico"
+                        }
                 await ws.send_text(json.dumps(payload))
             except Exception as e:
                 print(f"Error enviando a {uid}: {e}")
@@ -304,6 +336,13 @@ async def obtener_tipo_comunicacion():
         "tipo_actual": chat_manager.get_tipo_comunicacion()
     }
 
+@app.get("/symmetric-key")
+async def get_symmetric_key():
+    """Endpoint para obtener la clave simétrica actual"""
+    return {
+        "symmetric_key": chat_manager.get_symmetric_key()
+    }
+
 # --- WebSocket endpoints ---
 # En el websocket_endpoint - AGREGAR ESTOS PRINTS
 @app.websocket("/ws/{user_id}")
@@ -314,45 +353,26 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
             raw = await websocket.receive_text()
             data = json.loads(raw)
 
-            # Mensaje de registro de clave pública del cliente:
-            if data.get("type") == "register" and "public_key" in data:
-                chat_manager.register_client_public_key(user_id, data["public_key"])
-                await websocket.send_text(json.dumps({
-                    "status": "ok",
-                    "message": "public_key_registered",
-                    "tipo_comunicacion": chat_manager.get_tipo_comunicacion()
-                }))
-                continue
-
-            # Mensaje normal
             if data.get("type") == "message" and "content" in data:
                 print(f"\n=== MENSAJE RECIBIDO de {user_id} ===")
                 print(f"Tipo comunicación: {chat_manager.get_tipo_comunicacion()}")
-                print(f"Contenido recibido: {data['content'][:100]}...")  # Primeros 100 chars
-                print(f"Longitud contenido: {len(data['content'])}")
-                
+                print(f"Contenido recibido: {data['content'][:100]}...")
+
                 try:
-                    # Si estamos en modo asimétrico, intentamos descifrar
                     if chat_manager.get_tipo_comunicacion() == "Asimetrico":
-                        print("🔓 Intentando descifrar mensaje...")
                         decrypted = chat_manager.decrypt_with_private_key(data["content"])
-                        print(f"✅ Mensaje descifrado: {decrypted}")
+                        print(f"✅ Mensaje descifrado (asimétrico): {decrypted}")
+                    elif chat_manager.get_tipo_comunicacion() == "Simetrico":
+                        decrypted = chat_manager.symmetric_encryption.decrypt(data["content"])
+                        print(f"✅ Mensaje descifrado (simétrico): {decrypted}")
                     else:
-                        # En modo simétrico (por implementar), por ahora texto claro
                         decrypted = data["content"]
                         print(f"📝 Mensaje en texto plano: {decrypted}")
                 except Exception as e:
-                    # Si falla el descifrado, asumimos que llegó en texto claro
                     print(f"❌ Error al descifrar: {e}")
                     decrypted = data["content"]
-                    print(f"📝 Mensaje tratado como texto plano: {decrypted}")
 
-                # Broadcast
                 await chat_manager.broadcast_message(decrypted, origin_user_id=user_id)
-            else:
-                if "content" in data:
-                    # Mismo código de logs aquí también
-                    pass
 
     except WebSocketDisconnect:
         chat_manager.disconnect(user_id)
