@@ -1,0 +1,80 @@
+.splash-container {
+  height: 100vh;
+  width: 100vw;
+  background-image: url('../../assets/FondoUno.png');
+  background-size: contain;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.splash-content {
+  z-index: 1;
+  text-align: center;
+  padding: 1rem;
+}
+
+.branding {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.logo {
+  width: 100px;
+  min-width: 60px;
+}
+
+.text-group {
+  text-align: left;
+}
+
+.titulo {
+  font-size: 4rem;
+  font-weight: 900;
+  color: #014421;
+  font-family: 'Arial Black', sans-serif;
+  margin: 0;
+}
+
+.subtitulo {
+  font-size: 1rem;
+  font-weight: 600;
+  font-style: italic;
+  color: #0e1b39;
+  font-family: 'inter', sans-serif;
+  margin-top: 0.25rem;
+}
+
+/* Responsivo */
+@media (max-width: 600px) {
+  .branding {
+    flex-direction: column;
+    text-align: center;
+  }
+
+  .titulo {
+    font-size: 2rem;
+  }
+
+  .subtitulo {
+    font-size: 0.9rem;
+  }
+}
+
+.bg-image {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  object-fit: cover;
+  z-index: 0;
+}
