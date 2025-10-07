@@ -3,8 +3,7 @@ import { Send, Lock, Eye, EyeOff } from 'lucide-react';
 
 const ChatApp = () => {
   // Configuración del servidor - CAMBIA ESTA IP POR LA DE TU PC
-  //const SERVER_IP = 'localhost'; 
-  const SERVER_IP = '192.168.1.64';//Aqui ponen su ip de la pc PARA ACCEDER DESDE EL CELULAR
+  const SERVER_IP = 'localhost';
   const SERVER_PORT = '8000';
   
   // Estados principales
@@ -16,6 +15,12 @@ const ChatApp = () => {
   const [adminPassword, setAdminPassword] = useState('');
   const [showAdminLogin, setShowAdminLogin] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [TipoComunicacion, setTipoComunicacion] = useState('Asimetrico'); // Estado para el tipo de comunicación
+  
+  // ---- Claves RSA ----
+  const [publicKey, setPublicKey] = useState(null);
+  const [privateKey, setPrivateKey] = useState(null);
+  const [serverPublicKey, setServerPublicKey] = useState(null);
   
   // Referencias
   const wsRef = useRef(null);
@@ -36,23 +41,143 @@ const ChatApp = () => {
       setUserId(`user_${Date.now()}_${Math.floor(Math.random() * 1000)}`);
     }
   }, []);
-  
+
+  // Función para cambiar el tipo de comunicación en el servidor
+  const cambiarTipoComunicacionServidor = async (tipo) => {
+    try {
+      const response = await fetch(`http://${SERVER_IP}:${SERVER_PORT}/tipo-comunicacion`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ tipo: tipo }),
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log(data.message);
+        return true;
+      } else {
+        console.error('Error cambiando tipo de comunicación en el servidor');
+        return false;
+      }
+    } catch (error) {
+      console.error('Error conectando con el servidor:', error);
+      return false;
+    }
+  };
+
+  // Generar par de claves RSA para el cliente
+  const generateRSAKeys = async () => {
+    const keyPair = await window.crypto.subtle.generateKey(
+      {
+        name: "RSA-OAEP",
+        modulusLength: 2048,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: "SHA-256"
+      },
+      true,
+      ["encrypt", "decrypt"]
+    );
+
+    setPublicKey(keyPair.publicKey);
+    setPrivateKey(keyPair.privateKey);
+    console.log("🔑 Claves RSA generadas para el cliente.");
+  };
+
+  // Exportar la clave pública en formato PEM
+  const exportPublicKey = async (key) => {
+    const exported = await window.crypto.subtle.exportKey("spki", key);
+    const exportedAsString = String.fromCharCode(...new Uint8Array(exported));
+    const exportedAsBase64 = btoa(exportedAsString);
+    return `-----BEGIN PUBLIC KEY-----\n${exportedAsBase64.match(/.{1,64}/g).join('\n')}\n-----END PUBLIC KEY-----`;
+  };
+
+  // Cifrar texto con clave pública
+  const encryptMessage = async (text, publicKeyPem) => {
+    // Convertir la clave PEM del servidor a formato usable
+    const binaryDer = Uint8Array.from(atob(publicKeyPem
+      .replace(/-----.*-----/g, '')
+      .replace(/\s/g, '')
+    ), c => c.charCodeAt(0));
+
+    const key = await window.crypto.subtle.importKey(
+      "spki",
+      binaryDer.buffer,
+      { name: "RSA-OAEP", hash: "SHA-256" },
+      false,
+      ["encrypt"]
+    );
+
+    const encoded = new TextEncoder().encode(text);
+    const ciphertext = await window.crypto.subtle.encrypt({ name: "RSA-OAEP" }, key, encoded);
+    return btoa(String.fromCharCode(...new Uint8Array(ciphertext)));
+  };
+
+  // Descifrar mensaje con la clave privada
+  const decryptMessage = async (cipherBase64) => {
+    const cipherBytes = Uint8Array.from(atob(cipherBase64), c => c.charCodeAt(0));
+    const decrypted = await window.crypto.subtle.decrypt({ name: "RSA-OAEP" }, privateKey, cipherBytes);
+    return new TextDecoder().decode(decrypted);
+  };
+
   // Conectar WebSocket
-  const connectWebSocket = (asAdmin = false) => {
+  const connectWebSocket = async (asAdmin = false) => {
+    await generateRSAKeys();
+
+    // Obtener la clave pública del servidor
+    try {
+      const response = await fetch(`http://${SERVER_IP}:${SERVER_PORT}/public-key`);
+      const data = await response.json();
+      setServerPublicKey(data.public_key);
+      console.log("🧩 Clave pública del servidor obtenida.");
+    } catch (error) {
+      console.error("Error obteniendo clave pública del servidor:", error);
+    }
+
     const wsUrl = asAdmin 
       ? `ws://${SERVER_IP}:${SERVER_PORT}/ws/admin/${userId}`
       : `ws://${SERVER_IP}:${SERVER_PORT}/ws/${userId}`;
     
     wsRef.current = new WebSocket(wsUrl);
     
-    wsRef.current.onopen = () => {
+    wsRef.current.onopen = async () => {
       setIsConnected(true);
       console.log(`Conectado como ${asAdmin ? 'admin' : 'usuario regular'}`);
+      
+      // Enviar registro con clave pública
+      if (publicKey) {
+        try {
+          const publicKeyPem = await exportPublicKey(publicKey);
+          wsRef.current.send(JSON.stringify({
+            type: "register",
+            public_key: publicKeyPem
+          }));
+        } catch (error) {
+          console.error("Error enviando clave pública:", error);
+        }
+      }
     };
     
+    // CORRECCIÓN: Función onmessage corregida
     wsRef.current.onmessage = (event) => {
       const message = JSON.parse(event.data);
-      setMessages(prev => [...prev, message]);
+      
+      // Usar una función async interna para manejar el await
+      const processMessage = async () => {
+        try {
+          if (message.content && privateKey && TipoComunicacion === 'Asimetrico') {
+            const decrypted = await decryptMessage(message.content);
+            message.content = decrypted;
+          }
+        } catch (err) {
+          console.warn("No se pudo descifrar el mensaje (probablemente no estaba cifrado).");
+        }
+        
+        setMessages(prev => [...prev, message]);
+      };
+      
+      processMessage();
     };
     
     wsRef.current.onclose = () => {
@@ -92,14 +217,42 @@ const ChatApp = () => {
   };
   
   // Enviar mensaje
-  const sendMessage = () => {
-    if (newMessage.trim() && wsRef.current && isConnected) {
+ // En la función sendMessage - AGREGAR ESTOS CONSOLE.LOG
+const sendMessage = async () => {
+  if (newMessage.trim() && wsRef.current && isConnected) {
+    try {
+      let contentToSend = newMessage;
+      
+      console.log("🔍 ANTES del cifrado:", {
+        mensajeOriginal: newMessage,
+        tipoComunicacion: TipoComunicacion,
+        tieneClaveServidor: !!serverPublicKey
+      });
+      
+      // Solo cifrar si estamos en modo asimétrico y tenemos la clave pública del servidor
+      if (TipoComunicacion === 'Asimetrico' && serverPublicKey) {
+        contentToSend = await encryptMessage(newMessage, serverPublicKey);
+        
+        console.log("🔐 DESPUÉS del cifrado:", {
+          mensajeCifrado: contentToSend,
+          longitud: contentToSend.length,
+          esBase64: contentToSend.length > 100 // Los mensajes cifrados son más largos
+        });
+      } else {
+        console.log("📝 Modo texto plano - sin cifrado");
+      }
+      
       wsRef.current.send(JSON.stringify({
-        content: newMessage
+        type: "message",
+        content: contentToSend
       }));
       setNewMessage('');
+    } catch (error) {
+      console.error("Error procesando mensaje:", error);
+      alert("Error al enviar el mensaje");
     }
-  };
+  }
+};
   
   // Manejar Enter
   const handleKeyPress = (e) => {
@@ -115,6 +268,35 @@ const ChatApp = () => {
       minute: '2-digit'
     });
   };
+
+  const handleClick = async () => {
+    const nuevoTipo = TipoComunicacion === 'Asimetrico' ? 'Simetrico' : 'Asimetrico';
+    
+    // Primero cambiar en el servidor
+    const exito = await cambiarTipoComunicacionServidor(nuevoTipo);
+    
+    if (exito) {
+      // Si el servidor aceptó el cambio, actualizar el estado local
+      setTipoComunicacion(nuevoTipo);
+    } else {
+      alert('Error al cambiar el modo de comunicación');
+    }
+  };
+
+  // Obtener el tipo de comunicación actual al cargar el componente
+  useEffect(() => {
+    const obtenerTipoActual = async () => {
+      try {
+        const response = await fetch(`http://${SERVER_IP}:${SERVER_PORT}/tipo-comunicacion`);
+        const data = await response.json();
+        setTipoComunicacion(data.tipo_actual);
+      } catch (error) {
+        console.error('Error obteniendo tipo de comunicación:', error);
+      }
+    };
+    
+    obtenerTipoActual();
+  }, []);
   
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
@@ -127,33 +309,47 @@ const ChatApp = () => {
               {isAdmin && <span className="text-red-600 text-sm ml-2">[ADMIN]</span>}
             </h1>
             
-            <div className="flex items-center space-x-2">
-              {/* Indicador de conexión */}
-              <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}>
-              </div>
-              <span className="text-sm text-gray-600">
-                {isConnected ? 'Conectado' : 'Desconectado'}
-              </span>
+            <div className="flex items-center space-x-4">
+              {/* Botón para cambiar tipo de comunicación */}
+              <button 
+                className={`px-4 py-2 rounded-lg font-semibold transition-colors botoncitoInsano ${
+                  TipoComunicacion === 'Asimetrico' 
+                    ? 'bg-purple-600 hover:bg-purple-700 text-white botoncitoInsano' 
+                    : 'bg-green-600 hover:bg-green-700 text-white botoncitoInsano'
+                }`}
+                onClick={handleClick}
+              >
+                {TipoComunicacion === 'Asimetrico' ? '🔒 Asimétrico' : '🔓 Simétrico'}
+              </button>
               
-              {/* Botones de admin */}
-              {!isConnected && (
-                <>
-                  <button
-                    onClick={() => setShowAdminLogin(!showAdminLogin)}
-                    className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm flex items-center space-x-1"
-                  >
-                    <Lock size={16} />
-                    <span>Admin</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => connectWebSocket(false)}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm"
-                  >
-                    Conectar
-                  </button>
-                </>
-              )}
+              <div className="flex items-center space-x-2">
+                {/* Indicador de conexión */}
+                <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}>
+                </div>
+                <span className="text-sm text-gray-600">
+                  {isConnected ? 'Conectado' : 'Desconectado'}
+                </span>
+                
+                {/* Botones de admin */}
+                {!isConnected && (
+                  <>
+                    <button
+                      onClick={() => setShowAdminLogin(!showAdminLogin)}
+                      className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm flex items-center space-x-1"
+                    >
+                      <Lock size={16} />
+                      <span>Admin</span>
+                    </button>
+                    
+                    <button
+                      onClick={() => connectWebSocket(false)}
+                      className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm"
+                    >
+                      Conectar
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
           </div>
           
@@ -252,7 +448,7 @@ const ChatApp = () => {
           
           <div className="flex justify-between items-center mt-2 text-sm text-gray-600">
             <span>Tu ID: {userId}</span>
-            <span>{messages.length} mensaje{messages.length !== 1 ? 's' : ''}</span>
+            <span>Modo: {TipoComunicacion} | {messages.length} mensaje{messages.length !== 1 ? 's' : ''}</span>
           </div>
         </div>
       </div>
