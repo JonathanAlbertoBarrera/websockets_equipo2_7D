@@ -51,6 +51,10 @@ npm install
 # Ejecutar servidor de desarrollo
 npm run dev
 
+npm install crypto-js
+
 # El frontend estará disponible en:
 # http://localhost:5173
 ```
+
+

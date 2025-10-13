@@ -40,3 +40,22 @@
 .read-the-docs {
   color: #888;
 }
+
+.encryption-indicator {
+  margin-left: 5px;
+  font-size: 0.8em;
+}
+
+.message-content {
+  display: flex;
+  align-items: center;
+}
+
+/* Estilos para los diferentes tipos de mensajes */
+.message.encrypted-symmetric .encryption-indicator {
+  color: #4CAF50;  /* Verde para simétrico */
+}
+
+.message.encrypted-asymmetric .encryption-indicator {
+  color: #2196F3;  /* Azul para asimétrico */
+}
