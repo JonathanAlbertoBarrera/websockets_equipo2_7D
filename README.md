@@ -29,7 +29,7 @@ venv\Scripts\activate
 pip install -r requirements.txt
 
 # Ejecutar servidor
-python main.py
+uvicorn main:app --reload
 
 # El backend estará disponible en:
 # http://localhost:8000
