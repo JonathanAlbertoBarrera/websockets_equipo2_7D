@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, Lock, Eye, EyeOff } from 'lucide-react';
 
+//
+
 const ChatApp = () => {
   // Configuración del servidor - CAMBIA ESTA IP POR LA DE TU PC
   const SERVER_IP = 'localhost';
