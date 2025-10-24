@@ -199,8 +199,14 @@ class ChatManager:
             })
         await websocket.send_text(json.dumps(message_data))
 
-    async def broadcast_message(self, plaintext: str, origin_user_id: str):
-        """Broadcast message using asymmetric encryption"""
+    async def broadcast_message(self, plaintext: str, original_hash: str, origin_user_id: str):
+        """Broadcast message using asymmetric encryption with SHA-256 verification.
+        
+        Args:
+            plaintext: The decrypted message content
+            original_hash: The decrypted SHA-256 hash to verify message integrity
+            origin_user_id: The ID of the user who sent the message
+        """
         message_obj = Message(
             id=str(uuid.uuid4()),
             content=plaintext,
@@ -227,10 +233,12 @@ class ChatManager:
 
                 recipient_pub = recipient_info.get("public_key")
                 if recipient_pub:
-                    encrypted_b64 = self.encrypt_with_public_key_pem(recipient_pub, plaintext)
+                    encrypted_content = self.encrypt_with_public_key_pem(recipient_pub, plaintext)
+                    encrypted_hash = self.encrypt_with_public_key_pem(recipient_pub, original_hash)
                     payload = {
                         "id": message_obj.id,
-                        "content": encrypted_b64,
+                        "content": encrypted_content,
+                        "hash": encrypted_hash,
                         "encrypted": True,
                         "timestamp": message_obj.timestamp,
                         "user_id": origin_user_id
@@ -261,10 +269,12 @@ class ChatManager:
 
                 recipient_pub = recipient_info.get("public_key")
                 if recipient_pub:
-                    encrypted_b64 = self.encrypt_with_public_key_pem(recipient_pub, plaintext)
+                    encrypted_content = self.encrypt_with_public_key_pem(recipient_pub, plaintext)
+                    encrypted_hash = self.encrypt_with_public_key_pem(recipient_pub, original_hash)
                     payload = {
                         "id": message_obj.id, 
-                        "content": encrypted_b64, 
+                        "content": encrypted_content,
+                        "hash": encrypted_hash,
                         "encrypted": True, 
                         "timestamp": message_obj.timestamp, 
                         "user_id": origin_user_id,
@@ -351,16 +361,21 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 raw = await websocket.receive_text()
                 data = json.loads(raw)
 
-                if data.get("type") == "message" and "content" in data:
+                if data.get("type") == "message" and "content" in data and "hash" in data:
                     print(f"\n=== MENSAJE RECIBIDO de {user_id} ===")
-                    print(f"Contenido recibido: {data['content'][:100]}...")
+                    print(f"Contenido cifrado: {data['content'][:100]}...")
+                    print(f"Hash cifrado: {data['hash'][:100]}...")
 
                     try:
-                        decrypted = chat_manager.decrypt_with_private_key(data["content"])
-                        print(f"✅ Mensaje descifrado (RSA): {decrypted}")
-                        await chat_manager.broadcast_message(decrypted, origin_user_id=user_id)
+                        # Descifrar mensaje y hash
+                        decrypted_content = chat_manager.decrypt_with_private_key(data["content"])
+                        decrypted_hash = chat_manager.decrypt_with_private_key(data["hash"])
+                        print(f"✅ Mensaje descifrado (RSA): {decrypted_content}")
+                        print(f"✅ Hash descifrado (SHA-256): {decrypted_hash}")
+                        
+                        await chat_manager.broadcast_message(decrypted_content, decrypted_hash, origin_user_id=user_id)
                     except Exception as e:
-                        print(f"❌ Error al descifrar mensaje de {user_id}: {e}")
+                        print(f"❌ Error al descifrar mensaje/hash de {user_id}: {e}")
             except WebSocketDisconnect:
                 print(f"WebSocket desconectado: {user_id}")
                 await chat_manager.disconnect(user_id)
@@ -399,14 +414,17 @@ async def admin_websocket_endpoint(websocket: WebSocket, user_id: str):
                 continue
 
             # Mensaje admin: se espera cifrado con la clave pública del servidor
-            if data.get("type") == "message" and "content" in data:
+            if data.get("type") == "message" and "content" in data and "hash" in data:
                 try:
-                    decrypted = chat_manager.decrypt_with_private_key(data["content"])
+                    decrypted_content = chat_manager.decrypt_with_private_key(data["content"])
+                    decrypted_hash = chat_manager.decrypt_with_private_key(data["hash"])
+                    print(f"✅ Mensaje admin descifrado (RSA): {decrypted_content}")
+                    print(f"✅ Hash admin descifrado (SHA-256): {decrypted_hash}")
                 except Exception as e:
-                    print(f"❌ Error al descifrar mensaje de admin: {e}")
-                    decrypted = data["content"]
+                    print(f"❌ Error al descifrar mensaje/hash de admin: {e}")
+                    return
 
-                await chat_manager.broadcast_message(decrypted, origin_user_id=admin_id)
+                await chat_manager.broadcast_message(decrypted_content, decrypted_hash, origin_user_id=admin_id)
 
     except WebSocketDisconnect:
         chat_manager.disconnect(admin_id)

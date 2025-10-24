@@ -166,13 +166,33 @@ const ChatApp = () => {
         try {
           if (message.encrypted && privateKey) {
             console.log('📦 Mensaje cifrado recibido:', message.content);
+            console.log('📦 Hash cifrado recibido:', message.hash);
+            
             try {
-              const decrypted = await decryptMessage(message.content);
-              message.content = decrypted;
-              console.log('🔓 Mensaje descifrado (RSA):', decrypted);
+              // Descifrar el mensaje y el hash
+              const decryptedContent = await decryptMessage(message.content);
+              const decryptedHash = await decryptMessage(message.hash);
+              
+              // Calcular el hash del mensaje descifrado
+              const calculatedHash = await calculateSHA256(decryptedContent);
+              
+              // Verificar integridad comparando hashes
+              if (decryptedHash === calculatedHash) {
+                console.log('✅ Verificación de integridad exitosa');
+                message.content = decryptedContent;
+                message.verified = true;
+              } else {
+                console.error('❌ Verificación de integridad fallida');
+                message.content = '⚠️ Error: El mensaje puede haber sido alterado';
+                message.verified = false;
+              }
+              
+              console.log('🔓 Mensaje descifrado:', decryptedContent);
+              console.log('🔍 Hash original:', decryptedHash);
+              console.log('🔍 Hash calculado:', calculatedHash);
             } catch (err) {
-              console.warn("Error al descifrar mensaje:", err);
-              // Si hay error al descifrar, dejamos el contenido cifrado
+              console.warn("Error al descifrar o verificar mensaje:", err);
+              message.verified = false;
             }
           }
 
@@ -234,6 +254,16 @@ const ChatApp = () => {
   
   // Enviar mensaje
   // En la función sendMessage - AGREGAR ESTOS CONSOLE.LOG
+  // Función para calcular SHA-256
+  const calculateSHA256 = async (message) => {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(message);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    return hashHex;
+  };
+
   const sendMessage = async () => {
     if (!newMessage.trim() || !wsRef.current || !isConnected) {
       return;
@@ -241,14 +271,21 @@ const ChatApp = () => {
 
     try {
       const messageText = newMessage.trim();
-      console.log("📤 Enviando mensaje:", {
+      console.log("📤 Preparando mensaje:", {
         mensajeOriginal: messageText
       });
       
-      let contentToSend = messageText;
+      // 1. Calcular hash SHA-256 del mensaje original
+      const messageHash = await calculateSHA256(messageText);
+      console.log("🔍 Hash SHA-256:", messageHash);
+      
+      // 2. Cifrar el mensaje y el hash por separado
+      let encryptedContent, encryptedHash;
       if (serverPublicKey) {
-        contentToSend = await encryptMessage(messageText, serverPublicKey);
-        console.log("🔒 Mensaje cifrado (RSA):", contentToSend);
+        encryptedContent = await encryptMessage(messageText, serverPublicKey);
+        encryptedHash = await encryptMessage(messageHash, serverPublicKey);
+        console.log("🔒 Mensaje cifrado (RSA):", encryptedContent);
+        console.log("🔒 Hash cifrado (RSA):", encryptedHash);
       }
 
       // Verificar estado de la conexión antes de enviar
@@ -256,7 +293,7 @@ const ChatApp = () => {
         // Crear un mensaje temporal para mostrar inmediatamente
         const tempMessage = {
           id: `temp_${Date.now()}`,
-          content: messageText, // Mostrar el texto sin cifrar
+          content: messageText,
           timestamp: new Date().toISOString(),
           user_id: userId,
           encrypted: false
@@ -265,10 +302,11 @@ const ChatApp = () => {
         // Agregar el mensaje temporal a la interfaz
         setMessages(prev => [...prev, tempMessage]);
         
-        // Enviar el mensaje cifrado al servidor
+        // Enviar el mensaje y hash cifrados al servidor
         wsRef.current.send(JSON.stringify({
           type: "message",
-          content: contentToSend
+          content: encryptedContent,
+          hash: encryptedHash
         }));
         
         setNewMessage('');
