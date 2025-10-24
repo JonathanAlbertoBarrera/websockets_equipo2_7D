@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Send, Lock, Eye, EyeOff } from 'lucide-react';
 
 const ChatApp = () => {
-  // Configuración del servidor - CAMBIA ESTA IP POR LA DE TU PC
+  // Configuración del servidor 
   const SERVER_IP = 'localhost';
   const SERVER_PORT = '8000';
   
@@ -15,7 +15,7 @@ const ChatApp = () => {
   const [adminPassword, setAdminPassword] = useState('');
   const [showAdminLogin, setShowAdminLogin] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [TipoComunicacion, setTipoComunicacion] = useState('Asimetrico'); // Estado para el tipo de comunicación
+  // Solo se usa cifrado asimétrico
   
   // ---- Claves RSA ----
   const [publicKey, setPublicKey] = useState(null);
@@ -159,37 +159,46 @@ const ChatApp = () => {
       }
     };
     
-    // CORRECCIÓN: Función onmessage corregida
     wsRef.current.onmessage = (event) => {
       const message = JSON.parse(event.data);
       
-      // Usar una función async interna para manejar el await
-      const processMessage = async () => {
+      (async () => {
         try {
-          // Solo mostrar el contenido cifrado en consola
-          if (message.encrypted) {
+          if (message.encrypted && privateKey) {
             console.log('📦 Mensaje cifrado recibido:', message.content);
-            console.log('🔐 Tipo de comunicación:', message.tipo_comunicacion);
-            
-            if (message.tipo_comunicacion === 'Asimetrico' && privateKey) {
+            try {
               const decrypted = await decryptMessage(message.content);
               message.content = decrypted;
-              console.log('🔓 Mensaje descifrado:', decrypted);
+              console.log('🔓 Mensaje descifrado (RSA):', decrypted);
+            } catch (err) {
+              console.warn("Error al descifrar mensaje:", err);
+              // Si hay error al descifrar, dejamos el contenido cifrado
             }
           }
+
+          setMessages(prevMessages => {
+            // Evitar duplicados verificando el ID del mensaje
+            const messageExists = prevMessages.some(m => m.id === message.id);
+            if (messageExists) {
+              return prevMessages;
+            }
+            return [...prevMessages, message];
+          });
         } catch (err) {
           console.warn("Error al procesar mensaje:", err);
         }
-        
-        setMessages(prev => [...prev, message]);
-      };
-      
-      processMessage();
-    };
-    
-    wsRef.current.onclose = () => {
+      })();
+    };    wsRef.current.onclose = (event) => {
+      if (!event.wasClean) {
+        console.log('Conexión perdida. Código:', event.code, 'Razón:', event.reason || 'Sin razón especificada');
+      } else {
+        console.log('Conexión cerrada limpiamente. Código:', event.code, 'Razón:', event.reason);
+      }
       setIsConnected(false);
-      console.log('Conexión WebSocket cerrada');
+      if (event.code !== 1000) { // Si no es un cierre voluntario
+        wsRef.current = null;
+        setIsAdmin(false);
+      }
     };
     
     wsRef.current.onerror = (error) => {
@@ -226,33 +235,54 @@ const ChatApp = () => {
   // Enviar mensaje
   // En la función sendMessage - AGREGAR ESTOS CONSOLE.LOG
   const sendMessage = async () => {
-    if (newMessage.trim() && wsRef.current && isConnected) {
-      try {
-        let contentToSend = newMessage;
+    if (!newMessage.trim() || !wsRef.current || !isConnected) {
+      return;
+    }
+
+    try {
+      const messageText = newMessage.trim();
+      console.log("📤 Enviando mensaje:", {
+        mensajeOriginal: messageText
+      });
+      
+      let contentToSend = messageText;
+      if (serverPublicKey) {
+        contentToSend = await encryptMessage(messageText, serverPublicKey);
+        console.log("🔒 Mensaje cifrado (RSA):", contentToSend);
+      }
+
+      // Verificar estado de la conexión antes de enviar
+      if (wsRef.current.readyState === WebSocket.OPEN) {
+        // Crear un mensaje temporal para mostrar inmediatamente
+        const tempMessage = {
+          id: `temp_${Date.now()}`,
+          content: messageText, // Mostrar el texto sin cifrar
+          timestamp: new Date().toISOString(),
+          user_id: userId,
+          encrypted: false
+        };
+
+        // Agregar el mensaje temporal a la interfaz
+        setMessages(prev => [...prev, tempMessage]);
         
-        console.log("📤 Enviando mensaje:", {
-          mensajeOriginal: newMessage,
-          tipoComunicacion: TipoComunicacion
-        });
-        
-        if (TipoComunicacion === 'Asimetrico' && serverPublicKey) {
-          contentToSend = await encryptMessage(newMessage, serverPublicKey);
-          console.log("🔒 Mensaje cifrado (asimétrico):", contentToSend);
-        } else if (TipoComunicacion === 'Simetrico') {
-          // En modo simétrico, enviamos el mensaje sin mostrar el cifrado en la UI
-          console.log("🔒 Mensaje enviado en modo simétrico");
-        }
-        
+        // Enviar el mensaje cifrado al servidor
         wsRef.current.send(JSON.stringify({
           type: "message",
           content: contentToSend
         }));
         
         setNewMessage('');
-      } catch (error) {
-        console.error("Error procesando mensaje:", error);
-        alert("Error al enviar el mensaje");
+      } else {
+        console.log("Reconectando...");
+        await connectWebSocket(isAdmin);
       }
+    } catch (error) {
+      console.error("Error procesando mensaje:", error);
+      if (error.message.includes('WebSocket')) {
+        setIsConnected(false);
+        wsRef.current = null;
+      }
+      alert("Error al enviar el mensaje. Intenta reconectarte.");
     }
   };
   
@@ -271,34 +301,7 @@ const ChatApp = () => {
     });
   };
 
-  const handleClick = async () => {
-    const nuevoTipo = TipoComunicacion === 'Asimetrico' ? 'Simetrico' : 'Asimetrico';
-    
-    // Primero cambiar en el servidor
-    const exito = await cambiarTipoComunicacionServidor(nuevoTipo);
-    
-    if (exito) {
-      // Si el servidor aceptó el cambio, actualizar el estado local
-      setTipoComunicacion(nuevoTipo);
-    } else {
-      alert('Error al cambiar el modo de comunicación');
-    }
-  };
 
-  // Obtener el tipo de comunicación actual al cargar el componente
-  useEffect(() => {
-    const obtenerTipoActual = async () => {
-      try {
-        const response = await fetch(`http://${SERVER_IP}:${SERVER_PORT}/tipo-comunicacion`);
-        const data = await response.json();
-        setTipoComunicacion(data.tipo_actual);
-      } catch (error) {
-        console.error('Error obteniendo tipo de comunicación:', error);
-      }
-    };
-    
-    obtenerTipoActual();
-  }, []);
   
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
@@ -312,17 +315,10 @@ const ChatApp = () => {
             </h1>
             
             <div className="flex items-center space-x-4">
-              {/* Botón para cambiar tipo de comunicación */}
-              <button 
-                className={`px-4 py-2 rounded-lg font-semibold transition-colors botoncitoInsano ${
-                  TipoComunicacion === 'Asimetrico' 
-                    ? 'bg-purple-600 hover:bg-purple-700 text-white botoncitoInsano' 
-                    : 'bg-green-600 hover:bg-green-700 text-white botoncitoInsano'
-                }`}
-                onClick={handleClick}
-              >
-                {TipoComunicacion === 'Asimetrico' ? '🔒 Asimétrico' : '🔓 Simétrico'}
-              </button>
+              {/* Indicador de cifrado RSA */}
+              <div className="px-4 py-2 rounded-lg font-semibold bg-purple-600 text-black">
+                🔒 RSA-2048
+              </div>
               
               <div className="flex items-center space-x-2">
                 {/* Indicador de conexión */}
@@ -332,8 +328,8 @@ const ChatApp = () => {
                   {isConnected ? 'Conectado' : 'Desconectado'}
                 </span>
                 
-                {/* Botones de admin */}
-                {!isConnected && (
+                {/* Botones de conexión */}
+                {!isConnected ? (
                   <>
                     <button
                       onClick={() => setShowAdminLogin(!showAdminLogin)}
@@ -350,6 +346,24 @@ const ChatApp = () => {
                       Conectar
                     </button>
                   </>
+                ) : (
+                  <button
+                    onClick={() => {
+                      if (wsRef.current) {
+                        wsRef.current.close(1000, "Desconexión voluntaria");
+                        wsRef.current = null;
+                        setIsConnected(false);
+                        setIsAdmin(false);
+                        setMessages([]);
+                        setPublicKey(null);
+                        setPrivateKey(null);
+                        setServerPublicKey(null);
+                      }
+                    }}
+                    className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm"
+                  >
+                    Desconectar
+                  </button>
                 )}
               </div>
             </div>
@@ -451,7 +465,7 @@ const ChatApp = () => {
           
           <div className="flex justify-between items-center mt-2 text-sm text-gray-600">
             <span>Tu ID: {userId}</span>
-            <span>Modo: {TipoComunicacion} | {messages.length} mensaje{messages.length !== 1 ? 's' : ''}</span>
+            <span>{messages.length} mensaje{messages.length !== 1 ? 's' : ''}</span>
           </div>
         </div>
       </div>

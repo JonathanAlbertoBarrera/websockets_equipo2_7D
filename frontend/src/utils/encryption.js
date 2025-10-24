@@ -1,6 +1,4 @@
-import CryptoJS from 'crypto-js';
-
-// Cifrado asimétrico
+// Cifrado asimétrico (RSA-OAEP con SHA-256)
 export const asymmetricEncryption = {
   publicKey: null,
   privateKey: null,
@@ -61,38 +59,5 @@ export const asymmetricEncryption = {
       encrypted
     );
     return new TextDecoder().decode(decrypted);
-  }
-};
-
-// Cifrado simétrico
-export const symmetricEncryption = {
-  key: null,
-
-  async initialize() {
-    try {
-      const response = await fetch('http://localhost:8000/symmetric-key');
-      const data = await response.json();
-      this.key = data.symmetric_key;
-      return true;
-    } catch (error) {
-      console.error('Error obteniendo la clave simétrica:', error);
-      return false;
-    }
-  },
-
-  encrypt(message) {
-    if (!this.key) {
-      throw new Error('No symmetric key available');
-    }
-    const encrypted = CryptoJS.AES.encrypt(message, this.key);
-    return encrypted.toString();
-  },
-
-  decrypt(encryptedMessage) {
-    if (!this.key) {
-      throw new Error('No symmetric key available');
-    }
-    const decrypted = CryptoJS.AES.decrypt(encryptedMessage, this.key);
-    return decrypted.toString(CryptoJS.enc.Utf8);
   }
 };

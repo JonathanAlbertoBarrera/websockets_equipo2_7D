@@ -11,15 +11,11 @@ import base64
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
-from cryptography.fernet import Fernet
 from base64 import b64encode, b64decode
 
 # --- Modelos ---
 class LoginRequest(BaseModel):
     password: str
-
-class TipoComunicacionRequest(BaseModel):
-    tipo: str  # "Asimetrico" o "Simetrico"
 
 class Message(BaseModel):
     id: str
@@ -41,28 +37,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Clases de cifrado ---
-class SymmetricEncryption:
-    def __init__(self):
-        self.key = Fernet.generate_key()
-        self.cipher_suite = Fernet(self.key)
-
-    def encrypt(self, message: str) -> str:
-        """Cifra un mensaje usando Fernet (cifrado simétrico)"""
-        encrypted_message = self.cipher_suite.encrypt(message.encode())
-        return b64encode(encrypted_message).decode()
-
-    def decrypt(self, encrypted_message: str) -> str:
-        """Descifra un mensaje usando Fernet"""
-        try:
-            decoded = b64decode(encrypted_message.encode())
-            decrypted_message = self.cipher_suite.decrypt(decoded)
-            return decrypted_message.decode()
-        except Exception as e:
-            print(f"Error al descifrar: {e}")
-            return encrypted_message
-
-# --- ChatManager con RSA y cifrado simétrico ---
+# --- ChatManager con RSA ---
 class ChatManager:
     def __init__(self):
         # Generar claves RSA al crear la instancia del servidor
@@ -74,24 +49,6 @@ class ChatManager:
         self.messages: List[Message] = []
         # user_info guarda ip, port, is_admin, connected_at, y opcionalmente 'public_key' (PEM)
         self.user_info: Dict[str, dict] = {}
-        self.tipo_comunicacion: str = "Asimetrico"  # Valor por defecto
-        self.symmetric_encryption = SymmetricEncryption()
-
-    # --- Métodos para gestionar el tipo de comunicación ---
-    def set_tipo_comunicacion(self, tipo: str):
-        """Establece el tipo de comunicación: 'Asimetrico' o 'Simetrico'"""
-        tipos_validos = ["Asimetrico", "Simetrico"]
-        if tipo in tipos_validos:
-            self.tipo_comunicacion = tipo
-            print(f"Tipo de comunicación cambiado a: {tipo}")
-            return True
-        else:
-            print(f"Tipo de comunicación no válido: {tipo}. Usando: {self.tipo_comunicacion}")
-            return False
-
-    def get_tipo_comunicacion(self) -> str:
-        """Retorna el tipo de comunicación actual"""
-        return self.tipo_comunicacion
 
     # --- Utilidades RSA ---
     def get_public_key_pem(self) -> str:
@@ -141,42 +98,90 @@ class ChatManager:
 
     # --- Conexiones / mensajería ---
     async def connect(self, websocket: WebSocket, user_id: str, is_admin: bool = False):
-        await websocket.accept()
-        # Mostrar claves para debug (no lo hagas en producción)
-        print("Clave pública del servidor (PEM):")
-        print(self.get_public_key_pem())
-        print(f"Tipo de comunicación actual: {self.tipo_comunicacion}")
+        try:
+            # Limpiar conexión anterior si existe
+            if is_admin:
+                if user_id in self.admin_connections:
+                    await self.disconnect(user_id)
+            else:
+                if user_id in self.connections:
+                    await self.disconnect(user_id)
 
-        # info cliente
-        client_host = websocket.client.host if websocket.client else "unknown"
-        client_port = websocket.client.port if websocket.client else 0
-        
-        if is_admin:
-            self.admin_connections[user_id] = websocket
-        else:
-            self.connections[user_id] = websocket
-        
-        self.user_info[user_id] = {
-            "ip": client_host,
-            "port": client_port,
-            "is_admin": is_admin,
-            "connected_at": datetime.now().isoformat()
-            # 'public_key' puede agregarse luego con mensaje de registro
-        }
-        
-        print(f"Usuario {'admin' if is_admin else 'regular'} conectado: {user_id} desde {client_host}:{client_port}")
-        
-        # Enviar historial de mensajes al usuario que se conecta (en texto claro)
-        for message in self.messages[-50:]:
-            await self.send_message_to_user(websocket, message, is_admin)
+            # Aceptar nueva conexión
+            await websocket.accept()
+            
+            # Mostrar claves para debug (no lo hagas en producción)
+            print("Clave pública del servidor (PEM):")
+            print(self.get_public_key_pem())
 
-    def disconnect(self, user_id: str):
+            # info cliente
+            client_host = websocket.client.host if websocket.client else "unknown"
+            client_port = websocket.client.port if websocket.client else 0
+            
+            # Registrar nueva conexión
+            if is_admin:
+                self.admin_connections[user_id] = websocket
+            else:
+                self.connections[user_id] = websocket
+            
+            self.user_info[user_id] = {
+                "ip": client_host,
+                "port": client_port,
+                "is_admin": is_admin,
+                "connected_at": datetime.now().isoformat()
+            }
+            
+            print(f"Usuario {'admin' if is_admin else 'regular'} conectado: {user_id} desde {client_host}:{client_port}")
+            
+            try:
+                # Enviar historial de mensajes al usuario que se conecta
+                for message in self.messages[-50:]:
+                    await self.send_message_to_user(websocket, message, is_admin)
+            except Exception as e:
+                print(f"Error enviando historial a {user_id}: {e}")
+                
+            return True
+        except Exception as e:
+            print(f"Error en conexión de {user_id}: {e}")
+            try:
+                await websocket.close(code=1011)  # 1011 = Internal Error
+            except:
+                pass
+            return False
+
+    async def disconnect(self, user_id: str):
+        """Desconecta un usuario y limpia todas sus referencias"""
+        # Si el usuario ya no existe en ninguna colección, no hacer nada
+        if (user_id not in self.connections and 
+            user_id not in self.admin_connections and 
+            user_id not in self.user_info):
+            return
+
+        ws_to_close = None
+        
+        # Obtener el websocket antes de eliminar las referencias
         if user_id in self.connections:
+            ws_to_close = self.connections[user_id]
             del self.connections[user_id]
-        if user_id in self.admin_connections:
-            del self.admin_connections[user_id]
+            
+        admin_id = f"admin_{user_id}" if not user_id.startswith("admin_") else user_id
+        if admin_id in self.admin_connections:
+            ws_to_close = self.admin_connections[admin_id]
+            del self.admin_connections[admin_id]
+            
+        # Limpiar info de usuario
         if user_id in self.user_info:
             del self.user_info[user_id]
+        if admin_id in self.user_info:
+            del self.user_info[admin_id]
+            
+        # Cerrar el websocket al final, después de limpiar las referencias
+        if ws_to_close:
+            try:
+                await ws_to_close.close(code=1000)
+            except Exception as e:
+                print(f"Error al cerrar websocket de {user_id}: {e}")
+                
         print(f"Usuario desconectado: {user_id}")
     
     async def send_message_to_user(self, websocket: WebSocket, message: Message, is_admin: bool):
@@ -194,12 +199,8 @@ class ChatManager:
             })
         await websocket.send_text(json.dumps(message_data))
 
-    def get_symmetric_key(self) -> str:
-        """Retorna la clave simétrica en formato base64"""
-        return b64encode(self.symmetric_encryption.key).decode()
-
     async def broadcast_message(self, plaintext: str, origin_user_id: str):
-        """Modificar el método broadcast_message para manejar cifrado simétrico"""
+        """Broadcast message using asymmetric encryption"""
         message_obj = Message(
             id=str(uuid.uuid4()),
             content=plaintext,
@@ -210,53 +211,56 @@ class ChatManager:
         )
         self.messages.append(message_obj)
 
-        # Preparar el mensaje según el tipo de comunicación
-        for uid, ws in list(self.connections.items()):
-            try:
-                if self.tipo_comunicacion == "Simetrico":
-                    encrypted = self.symmetric_encryption.encrypt(plaintext)
-                    payload = {
-                        "id": message_obj.id,
-                        "content": encrypted,
-                        "encrypted": True,
-                        "timestamp": message_obj.timestamp,
-                        "user_id": origin_user_id,
-                        "tipo_comunicacion": "Simetrico"
-                    }
-                else:
-                    # Código existente para asimétrico...
-                    recipient_info = self.user_info.get(uid, {})
-                    recipient_pub = recipient_info.get("public_key")
-                    if recipient_pub:
-                        encrypted_b64 = self.encrypt_with_public_key_pem(recipient_pub, plaintext)
-                        payload = {
-                            "id": message_obj.id,
-                            "content": encrypted_b64,
-                            "encrypted": True,
-                            "timestamp": message_obj.timestamp,
-                            "user_id": origin_user_id,
-                            "tipo_comunicacion": "Asimetrico"
-                        }
-                    else:
-                        payload = {
-                            "id": message_obj.id,
-                            "content": plaintext,
-                            "encrypted": False,
-                            "timestamp": message_obj.timestamp,
-                            "user_id": origin_user_id,
-                            "tipo_comunicacion": "Asimetrico"
-                        }
-                await ws.send_text(json.dumps(payload))
-            except Exception as e:
-                print(f"Error enviando a {uid}: {e}")
+        # Lista para mantener las conexiones a desconectar
+        to_disconnect = set()
 
-        # Enviar a admins
-        for uid, ws in list(self.admin_connections.items()):
+        # Preparar mensajes para usuarios regulares
+        regular_messages = []
+        for uid, ws in list(self.connections.items()):
+            if uid == origin_user_id:  # Skip sender
+                continue
+                
             try:
                 recipient_info = self.user_info.get(uid, {})
+                if not recipient_info:
+                    continue
+
                 recipient_pub = recipient_info.get("public_key")
+                if recipient_pub:
+                    encrypted_b64 = self.encrypt_with_public_key_pem(recipient_pub, plaintext)
+                    payload = {
+                        "id": message_obj.id,
+                        "content": encrypted_b64,
+                        "encrypted": True,
+                        "timestamp": message_obj.timestamp,
+                        "user_id": origin_user_id
+                    }
+                else:
+                    payload = {
+                        "id": message_obj.id,
+                        "content": plaintext,
+                        "encrypted": False,
+                        "timestamp": message_obj.timestamp,
+                        "user_id": origin_user_id
+                    }
+                regular_messages.append((uid, ws, json.dumps(payload)))
+            except Exception as e:
+                print(f"Error preparando mensaje para {uid}: {e}")
+                to_disconnect.add(uid)
+
+        # Preparar mensajes para admins
+        admin_messages = []
+        for uid, ws in list(self.admin_connections.items()):
+            if uid == origin_user_id:  # Skip sender
+                continue
                 
-                if self.tipo_comunicacion == "Asimetrico" and recipient_pub:
+            try:
+                recipient_info = self.user_info.get(uid, {})
+                if not recipient_info:
+                    continue
+
+                recipient_pub = recipient_info.get("public_key")
+                if recipient_pub:
                     encrypted_b64 = self.encrypt_with_public_key_pem(recipient_pub, plaintext)
                     payload = {
                         "id": message_obj.id, 
@@ -264,7 +268,8 @@ class ChatManager:
                         "encrypted": True, 
                         "timestamp": message_obj.timestamp, 
                         "user_id": origin_user_id,
-                        "tipo_comunicacion": self.tipo_comunicacion
+                        "user_ip": message_obj.user_ip,
+                        "user_port": message_obj.user_port
                     }
                 else:
                     payload = {
@@ -273,15 +278,35 @@ class ChatManager:
                         "encrypted": False, 
                         "timestamp": message_obj.timestamp, 
                         "user_id": origin_user_id,
-                        "tipo_comunicacion": self.tipo_comunicacion
+                        "user_ip": message_obj.user_ip,
+                        "user_port": message_obj.user_port
                     }
-                # incluir ip/port en el payload para admins
-                payload.update({"user_ip": message_obj.user_ip, "user_port": message_obj.user_port})
-                await ws.send_text(json.dumps(payload))
+                admin_messages.append((uid, ws, json.dumps(payload)))
+            except Exception as e:
+                print(f"Error preparando mensaje para admin {uid}: {e}")
+                to_disconnect.add(uid)
+
+        # Enviar mensajes
+        for uid, ws, msg in regular_messages:
+            try:
+                await ws.send_text(msg)
+            except Exception as e:
+                print(f"Error enviando a {uid}: {e}")
+                to_disconnect.add(uid)
+
+        for uid, ws, msg in admin_messages:
+            try:
+                await ws.send_text(msg)
             except Exception as e:
                 print(f"Error enviando a admin {uid}: {e}")
+                to_disconnect.add(uid)
 
-# --- Instancia global ---
+        # Desconectar usuarios con error al final
+        for uid in to_disconnect:
+            try:
+                await self.disconnect(uid)
+            except Exception as e:
+                print(f"Error al desconectar {uid}: {e}")# --- Instancia global ---
 chat_manager = ChatManager()
 
 # --- Endpoints HTTP ---
@@ -312,67 +337,44 @@ async def get_connected_users():
 async def get_server_public_key():
     return {"public_key": chat_manager.get_public_key_pem()}
 
-# --- Nuevo endpoint para cambiar tipo de comunicación ---
-@app.post("/tipo-comunicacion")
-async def cambiar_tipo_comunicacion(request: TipoComunicacionRequest):
-    """Endpoint para cambiar entre comunicación Asimétrica y Simétrica"""
-    success = chat_manager.set_tipo_comunicacion(request.tipo)
-    if success:
-        return {
-            "status": "success", 
-            "message": f"Tipo de comunicación cambiado a: {request.tipo}",
-            "tipo_actual": chat_manager.get_tipo_comunicacion()
-        }
-    else:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Tipo de comunicación no válido: {request.tipo}. Use 'Asimetrico' o 'Simetrico'"
-        )
 
-@app.get("/tipo-comunicacion")
-async def obtener_tipo_comunicacion():
-    """Endpoint para obtener el tipo de comunicación actual"""
-    return {
-        "tipo_actual": chat_manager.get_tipo_comunicacion()
-    }
-
-@app.get("/symmetric-key")
-async def get_symmetric_key():
-    """Endpoint para obtener la clave simétrica actual"""
-    return {
-        "symmetric_key": chat_manager.get_symmetric_key()
-    }
 
 # --- WebSocket endpoints ---
-# En el websocket_endpoint - AGREGAR ESTOS PRINTS
 @app.websocket("/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str):
-    await chat_manager.connect(websocket, user_id, is_admin=False)
+    if not await chat_manager.connect(websocket, user_id, is_admin=False):
+        return
+
     try:
         while True:
-            raw = await websocket.receive_text()
-            data = json.loads(raw)
+            try:
+                raw = await websocket.receive_text()
+                data = json.loads(raw)
 
-            if data.get("type") == "message" and "content" in data:
-                print(f"\n=== MENSAJE RECIBIDO de {user_id} ===")
-                print(f"Tipo comunicación: {chat_manager.get_tipo_comunicacion()}")
-                print(f"Contenido recibido: {data['content'][:100]}...")
+                if data.get("type") == "message" and "content" in data:
+                    print(f"\n=== MENSAJE RECIBIDO de {user_id} ===")
+                    print(f"Contenido recibido: {data['content'][:100]}...")
 
-                try:
-                    if chat_manager.get_tipo_comunicacion() == "Asimetrico":
+                    try:
                         decrypted = chat_manager.decrypt_with_private_key(data["content"])
-                        print(f"✅ Mensaje descifrado (asimétrico): {decrypted}")
-                    elif chat_manager.get_tipo_comunicacion() == "Simetrico":
-                        decrypted = chat_manager.symmetric_encryption.decrypt(data["content"])
-                        print(f"✅ Mensaje descifrado (simétrico): {decrypted}")
-                    else:
-                        decrypted = data["content"]
-                        print(f"📝 Mensaje en texto plano: {decrypted}")
-                except Exception as e:
-                    print(f"❌ Error al descifrar: {e}")
-                    decrypted = data["content"]
-
-                await chat_manager.broadcast_message(decrypted, origin_user_id=user_id)
+                        print(f"✅ Mensaje descifrado (RSA): {decrypted}")
+                        await chat_manager.broadcast_message(decrypted, origin_user_id=user_id)
+                    except Exception as e:
+                        print(f"❌ Error al descifrar mensaje de {user_id}: {e}")
+            except WebSocketDisconnect:
+                print(f"WebSocket desconectado: {user_id}")
+                await chat_manager.disconnect(user_id)
+                break
+            except json.JSONDecodeError:
+                print(f"Error: Mensaje mal formado de {user_id}")
+                continue
+            except Exception as e:
+                print(f"Error procesando mensaje de {user_id}: {e}")
+                await chat_manager.disconnect(user_id)
+                break
+    except Exception as e:
+        print(f"Error en el websocket de {user_id}: {e}")
+        await chat_manager.disconnect(user_id)
 
     except WebSocketDisconnect:
         chat_manager.disconnect(user_id)
@@ -399,24 +401,12 @@ async def admin_websocket_endpoint(websocket: WebSocket, user_id: str):
             # Mensaje admin: se espera cifrado con la clave pública del servidor
             if data.get("type") == "message" and "content" in data:
                 try:
-                    if chat_manager.get_tipo_comunicacion() == "Asimetrico":
-                        decrypted = chat_manager.decrypt_with_private_key(data["content"])
-                    else:
-                        decrypted = data["content"]
-                except Exception:
+                    decrypted = chat_manager.decrypt_with_private_key(data["content"])
+                except Exception as e:
+                    print(f"❌ Error al descifrar mensaje de admin: {e}")
                     decrypted = data["content"]
 
                 await chat_manager.broadcast_message(decrypted, origin_user_id=admin_id)
-            else:
-                if "content" in data:
-                    try:
-                        if chat_manager.get_tipo_comunicacion() == "Asimetrico":
-                            decrypted = chat_manager.decrypt_with_private_key(data["content"])
-                        else:
-                            decrypted = data["content"]
-                    except Exception:
-                        decrypted = data["content"]
-                    await chat_manager.broadcast_message(decrypted, origin_user_id=admin_id)
 
     except WebSocketDisconnect:
         chat_manager.disconnect(admin_id)
@@ -424,6 +414,5 @@ async def admin_websocket_endpoint(websocket: WebSocket, user_id: str):
 @app.get("/")
 async def root():
     return {
-        "message": "Chat WebSocket Server está funcionando",
-        "tipo_comunicacion_actual": chat_manager.get_tipo_comunicacion()
+        "message": "Chat WebSocket Server está funcionando con cifrado RSA"
     }
