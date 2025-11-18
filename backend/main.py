@@ -6,6 +6,11 @@ import uuid
 from datetime import datetime
 from typing import Dict, List, Optional
 import base64
+import os
+from dotenv import load_dotenv
+
+# Cargar variables de entorno
+load_dotenv()
 
 # Crypto
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
@@ -25,13 +30,51 @@ class Message(BaseModel):
     user_ip: Optional[str] = None
     user_port: Optional[int] = None
 
-# Configuración
-ADMIN_PASSWORD = "admin123" 
+# Configuración desde variables de entorno
+def get_required_env(key: str):
+    """Obtiene una variable de entorno requerida. Falla si no existe."""
+    value = os.getenv(key)
+    
+    if value is None:
+        raise ValueError(
+            f"ERROR: Variable de entorno '{key}' no configurada.\n"
+            f"   Por favor, configura el archivo .env con todas las variables requeridas.\n"
+            f"   Consulta .env.example para ver el formato correcto."
+        )
+    
+    return value
+
+# Cargar variables de entorno requeridas
+ENVIRONMENT = get_required_env("ENVIRONMENT")
+ADMIN_PASSWORD = get_required_env("ADMIN_PASSWORD")
+SECRET_KEY = get_required_env("SECRET_KEY")
+RSA_KEY_SIZE = int(get_required_env("RSA_KEY_SIZE"))
+ALLOWED_ORIGINS = get_required_env("ALLOWED_ORIGINS").split(",")
+
+# SSL/TLS Configuration
+USE_SSL = os.getenv("USE_SSL", "false").lower() == "true"
+SSL_CERT_FILE = os.getenv("SSL_CERT_FILE", "ssl_cert.pem")
+SSL_KEY_FILE = os.getenv("SSL_KEY_FILE", "ssl_cert.key")
+
+# Función para logs condicionales
+def debug_log(*args, **kwargs):
+    """Imprime logs solo en modo development"""
+    if ENVIRONMENT == "development":
+        print(*args, **kwargs)
+
+debug_log(f" Configuración cargada correctamente")
+debug_log(f" Entorno: {ENVIRONMENT}")
+debug_log(f" RSA Key Size: {RSA_KEY_SIZE}")
+debug_log(f" CORS Origins permitidos: {ALLOWED_ORIGINS}")
+debug_log(f" SSL/TLS: {'Habilitado' if USE_SSL else 'Deshabilitado'}")
+if USE_SSL:
+    debug_log(f" Certificado: {SSL_CERT_FILE}")
+    debug_log(f" Clave privada: {SSL_KEY_FILE}")
 
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # en prod, restringir dominios
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -40,8 +83,11 @@ app.add_middleware(
 # --- ChatManager con RSA ---
 class ChatManager:
     def __init__(self):
-        # Generar claves RSA al crear la instancia del servidor
-        self.server_private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        # Generar claves RSA al crear la instancia del servidor usando el tamaño configurado
+        self.server_private_key = rsa.generate_private_key(
+            public_exponent=65537, 
+            key_size=RSA_KEY_SIZE
+        )
         self.server_public_key = self.server_private_key.public_key()
 
         self.connections: Dict[str, WebSocket] = {}
@@ -110,9 +156,9 @@ class ChatManager:
             # Aceptar nueva conexión
             await websocket.accept()
             
-            # Mostrar claves para debug (no lo hagas en producción)
-            print("Clave pública del servidor (PEM):")
-            print(self.get_public_key_pem())
+            # Mostrar claves para debug
+            debug_log("Clave pública del servidor (PEM):")
+            debug_log(self.get_public_key_pem())
 
             # info cliente
             client_host = websocket.client.host if websocket.client else "unknown"
@@ -131,18 +177,18 @@ class ChatManager:
                 "connected_at": datetime.now().isoformat()
             }
             
-            print(f"Usuario {'admin' if is_admin else 'regular'} conectado: {user_id} desde {client_host}:{client_port}")
+            debug_log(f"Usuario {'admin' if is_admin else 'regular'} conectado: {user_id} desde {client_host}:{client_port}")
             
             try:
                 # Enviar historial de mensajes al usuario que se conecta
                 for message in self.messages[-50:]:
                     await self.send_message_to_user(websocket, message, is_admin)
             except Exception as e:
-                print(f"Error enviando historial a {user_id}: {e}")
+                debug_log(f"Error enviando historial a {user_id}: {e}")
                 
             return True
         except Exception as e:
-            print(f"Error en conexión de {user_id}: {e}")
+            debug_log(f"Error en conexión de {user_id}: {e}")
             try:
                 await websocket.close(code=1011)  # 1011 = Internal Error
             except:
@@ -180,9 +226,9 @@ class ChatManager:
             try:
                 await ws_to_close.close(code=1000)
             except Exception as e:
-                print(f"Error al cerrar websocket de {user_id}: {e}")
+                debug_log(f"Error al cerrar websocket de {user_id}: {e}")
                 
-        print(f"Usuario desconectado: {user_id}")
+        debug_log(f"Usuario desconectado: {user_id}")
     
     async def send_message_to_user(self, websocket: WebSocket, message: Message, is_admin: bool):
         """Envía message (obj Message) ya preparado. Aquí se asume content en texto claro."""
@@ -253,7 +299,7 @@ class ChatManager:
                     }
                 regular_messages.append((uid, ws, json.dumps(payload)))
             except Exception as e:
-                print(f"Error preparando mensaje para {uid}: {e}")
+                debug_log(f"Error preparando mensaje para {uid}: {e}")
                 to_disconnect.add(uid)
 
         # Preparar mensajes para admins
@@ -293,7 +339,7 @@ class ChatManager:
                     }
                 admin_messages.append((uid, ws, json.dumps(payload)))
             except Exception as e:
-                print(f"Error preparando mensaje para admin {uid}: {e}")
+                debug_log(f"Error preparando mensaje para admin {uid}: {e}")
                 to_disconnect.add(uid)
 
         # Enviar mensajes
@@ -301,14 +347,14 @@ class ChatManager:
             try:
                 await ws.send_text(msg)
             except Exception as e:
-                print(f"Error enviando a {uid}: {e}")
+                debug_log(f"Error enviando a {uid}: {e}")
                 to_disconnect.add(uid)
 
         for uid, ws, msg in admin_messages:
             try:
                 await ws.send_text(msg)
             except Exception as e:
-                print(f"Error enviando a admin {uid}: {e}")
+                debug_log(f"Error enviando a admin {uid}: {e}")
                 to_disconnect.add(uid)
 
         # Desconectar usuarios con error al final
@@ -316,7 +362,7 @@ class ChatManager:
             try:
                 await self.disconnect(uid)
             except Exception as e:
-                print(f"Error al desconectar {uid}: {e}")# --- Instancia global ---
+                debug_log(f"Error al desconectar {uid}: {e}")# --- Instancia global ---
 chat_manager = ChatManager()
 
 # --- Endpoints HTTP ---
@@ -362,33 +408,33 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 data = json.loads(raw)
 
                 if data.get("type") == "message" and "content" in data and "hash" in data:
-                    print(f"\n=== MENSAJE RECIBIDO de {user_id} ===")
-                    print(f"Contenido cifrado: {data['content'][:100]}...")
-                    print(f"Hash cifrado: {data['hash'][:100]}...")
+                    debug_log(f"\n=== MENSAJE RECIBIDO de {user_id} ===")
+                    debug_log(f"Contenido cifrado: {data['content'][:100]}...")
+                    debug_log(f"Hash cifrado: {data['hash'][:100]}...")
 
                     try:
                         # Descifrar mensaje y hash
                         decrypted_content = chat_manager.decrypt_with_private_key(data["content"])
                         decrypted_hash = chat_manager.decrypt_with_private_key(data["hash"])
-                        print(f"✅ Mensaje descifrado (RSA): {decrypted_content}")
-                        print(f"✅ Hash descifrado (SHA-256): {decrypted_hash}")
+                        debug_log(f" Mensaje descifrado (RSA): {decrypted_content}")
+                        debug_log(f" Hash descifrado (SHA-256): {decrypted_hash}")
                         
                         await chat_manager.broadcast_message(decrypted_content, decrypted_hash, origin_user_id=user_id)
                     except Exception as e:
-                        print(f"❌ Error al descifrar mensaje/hash de {user_id}: {e}")
+                        debug_log(f" Error al descifrar mensaje/hash de {user_id}: {e}")
             except WebSocketDisconnect:
-                print(f"WebSocket desconectado: {user_id}")
+                debug_log(f"WebSocket desconectado: {user_id}")
                 await chat_manager.disconnect(user_id)
                 break
             except json.JSONDecodeError:
-                print(f"Error: Mensaje mal formado de {user_id}")
+                debug_log(f"Error: Mensaje mal formado de {user_id}")
                 continue
             except Exception as e:
-                print(f"Error procesando mensaje de {user_id}: {e}")
+                debug_log(f"Error procesando mensaje de {user_id}: {e}")
                 await chat_manager.disconnect(user_id)
                 break
     except Exception as e:
-        print(f"Error en el websocket de {user_id}: {e}")
+        debug_log(f"Error en el websocket de {user_id}: {e}")
         await chat_manager.disconnect(user_id)
 
     except WebSocketDisconnect:
@@ -418,10 +464,10 @@ async def admin_websocket_endpoint(websocket: WebSocket, user_id: str):
                 try:
                     decrypted_content = chat_manager.decrypt_with_private_key(data["content"])
                     decrypted_hash = chat_manager.decrypt_with_private_key(data["hash"])
-                    print(f"✅ Mensaje admin descifrado (RSA): {decrypted_content}")
-                    print(f"✅ Hash admin descifrado (SHA-256): {decrypted_hash}")
+                    debug_log(f" Mensaje admin descifrado (RSA): {decrypted_content}")
+                    debug_log(f" Hash admin descifrado (SHA-256): {decrypted_hash}")
                 except Exception as e:
-                    print(f"❌ Error al descifrar mensaje/hash de admin: {e}")
+                    debug_log(f" Error al descifrar mensaje/hash de admin: {e}")
                     return
 
                 await chat_manager.broadcast_message(decrypted_content, decrypted_hash, origin_user_id=admin_id)
@@ -431,6 +477,50 @@ async def admin_websocket_endpoint(websocket: WebSocket, user_id: str):
 
 @app.get("/")
 async def root():
+    protocol = "HTTPS" if USE_SSL else "HTTP"
+    ws_protocol = "WSS" if USE_SSL else "WS"
     return {
-        "message": "Chat WebSocket Server está funcionando con cifrado RSA"
+        "message": f"Chat WebSocket Server está funcionando con cifrado RSA",
+        "protocol": protocol,
+        "websocket_protocol": ws_protocol,
+        "ssl_enabled": USE_SSL
     }
+
+# --- Ejecutar servidor con o sin SSL ---
+if __name__ == "__main__":
+    import uvicorn
+    
+    if USE_SSL:
+        # Verificar que existan los archivos de certificado
+        if not os.path.exists(SSL_CERT_FILE):
+            print(f" ERROR: No se encontró el archivo de certificado: {SSL_CERT_FILE}")
+            print("   Ejecuta: python generate_certs.py")
+            exit(1)
+        if not os.path.exists(SSL_KEY_FILE):
+            print(f" ERROR: No se encontró el archivo de clave privada: {SSL_KEY_FILE}")
+            print("   Ejecuta: python generate_certs.py")
+            exit(1)
+        
+        debug_log(f"\n Iniciando servidor con SSL/TLS...")
+        debug_log(f" URL: https://localhost:8000")
+        debug_log(f" WebSocket: wss://localhost:8000")
+        
+        uvicorn.run(
+            "main:app",
+            host="0.0.0.0",
+            port=8000,
+            ssl_keyfile=SSL_KEY_FILE,
+            ssl_certfile=SSL_CERT_FILE,
+            reload=True
+        )
+    else:
+        debug_log(f"\n  Iniciando servidor SIN SSL (desarrollo)")
+        debug_log(f" URL: http://localhost:8000")
+        debug_log(f" WebSocket: ws://localhost:8000")
+        
+        uvicorn.run(
+            "main:app",
+            host="0.0.0.0",
+            port=8000,
+            reload=True
+        )

@@ -2,9 +2,43 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Send, Lock, Eye, EyeOff } from 'lucide-react';
 
 const ChatApp = () => {
-  // Configuración del servidor 
-  const SERVER_IP = 'localhost';
-  const SERVER_PORT = '8000';
+  // Validar y cargar variables de entorno requeridas
+  const getRequiredEnv = (key) => {
+    const value = import.meta.env[key];
+    if (!value) {
+      const error = `❌ ERROR: Variable de entorno '${key}' no configurada.\n` +
+        `Por favor, configura el archivo .env con todas las variables requeridas.\n` +
+        `Consulta .env.example para ver el formato correcto.`;
+      console.error(error);
+      alert(error);
+      throw new Error(error);
+    }
+    return value;
+  };
+
+  let WS_URL, API_URL, DEBUG, ENVIRONMENT;
+  
+  try {
+    WS_URL = getRequiredEnv('VITE_WS_URL');
+    API_URL = getRequiredEnv('VITE_API_URL');
+    DEBUG = import.meta.env.VITE_DEBUG === 'true';
+    ENVIRONMENT = import.meta.env.VITE_ENVIRONMENT || 'development';
+  } catch (error) {
+    return (
+      <div style={{ padding: '20px', color: 'red' }}>
+        <h2>Error de Configuración</h2>
+        <p>{error.message}</p>
+        <p>Revisa tu archivo <code>.env</code> en la carpeta frontend</p>
+      </div>
+    );
+  }
+  
+  // Función para logs condicionales
+  const debugLog = (...args) => {
+    if (ENVIRONMENT === 'development') {
+      console.log(...args);
+    }
+  };
   
   // Estados principales
   const [messages, setMessages] = useState([]);
@@ -25,6 +59,12 @@ const ChatApp = () => {
   // Referencias
   const wsRef = useRef(null);
   const messagesEndRef = useRef(null);
+  const isAdminRef = useRef(false);
+  
+  // Actualizar la referencia cuando cambia isAdmin
+  useEffect(() => {
+    isAdminRef.current = isAdmin;
+  }, [isAdmin]);
   
   // Scroll automático al final
   const scrollToBottom = () => {
@@ -45,7 +85,7 @@ const ChatApp = () => {
   // Función para cambiar el tipo de comunicación en el servidor
   const cambiarTipoComunicacionServidor = async (tipo) => {
     try {
-      const response = await fetch(`http://${SERVER_IP}:${SERVER_PORT}/tipo-comunicacion`, {
+      const response = await fetch(`${API_URL}/tipo-comunicacion`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -55,14 +95,13 @@ const ChatApp = () => {
       
       if (response.ok) {
         const data = await response.json();
-        console.log(data.message);
         return true;
       } else {
-        console.error('Error cambiando tipo de comunicación en el servidor');
+        debugLog('Error cambiando tipo de comunicación en el servidor');
         return false;
       }
     } catch (error) {
-      console.error('Error conectando con el servidor:', error);
+      debugLog('Error conectando con el servidor:', error);
       return false;
     }
   };
@@ -82,7 +121,7 @@ const ChatApp = () => {
 
     setPublicKey(keyPair.publicKey);
     setPrivateKey(keyPair.privateKey);
-    console.log("🔑 Claves RSA generadas para el cliente.");
+    debugLog(" Claves RSA generadas para el cliente.");
   };
 
   // Exportar la clave pública en formato PEM
@@ -127,23 +166,23 @@ const ChatApp = () => {
 
     // Obtener la clave pública del servidor
     try {
-      const response = await fetch(`http://${SERVER_IP}:${SERVER_PORT}/public-key`);
+      const response = await fetch(`${API_URL}/public-key`);
       const data = await response.json();
       setServerPublicKey(data.public_key);
-      console.log("🧩 Clave pública del servidor obtenida.");
+      debugLog(" Clave pública del servidor obtenida.");
     } catch (error) {
-      console.error("Error obteniendo clave pública del servidor:", error);
+      debugLog(" Error obteniendo clave pública del servidor:", error);
     }
 
-    const wsUrl = asAdmin 
-      ? `ws://${SERVER_IP}:${SERVER_PORT}/ws/admin/${userId}`
-      : `ws://${SERVER_IP}:${SERVER_PORT}/ws/${userId}`;
+    const wsUrl = asAdmin
+      ? `${WS_URL}/ws/admin/${userId}`
+      : `${WS_URL}/ws/${userId}`;
     
     wsRef.current = new WebSocket(wsUrl);
     
     wsRef.current.onopen = async () => {
       setIsConnected(true);
-      console.log(`Conectado como ${asAdmin ? 'admin' : 'usuario regular'}`);
+      debugLog(`Conectado como ${asAdmin ? 'admin' : 'usuario regular'}`);
       
       // Enviar registro con clave pública
       if (publicKey) {
@@ -154,7 +193,7 @@ const ChatApp = () => {
             public_key: publicKeyPem
           }));
         } catch (error) {
-          console.error("Error enviando clave pública:", error);
+          debugLog(" Error enviando clave pública:", error);
         }
       }
     };
@@ -162,11 +201,17 @@ const ChatApp = () => {
     wsRef.current.onmessage = (event) => {
       const message = JSON.parse(event.data);
       
+      debugLog(' Mensaje recibido completo:', message);
+      debugLog(' asAdmin (en callback):', asAdmin);
+      debugLog(' isAdmin (estado):', isAdmin);
+      debugLog(' user_ip:', message.user_ip);
+      debugLog(' user_port:', message.user_port);
+      
       (async () => {
         try {
           if (message.encrypted && privateKey) {
-            console.log('📦 Mensaje cifrado recibido:', message.content);
-            console.log('📦 Hash cifrado recibido:', message.hash);
+            debugLog(' Mensaje cifrado recibido:', message.content);
+            debugLog(' Hash cifrado recibido:', message.hash);
             
             try {
               // Descifrar el mensaje y el hash
@@ -178,20 +223,25 @@ const ChatApp = () => {
               
               // Verificar integridad comparando hashes
               if (decryptedHash === calculatedHash) {
-                console.log('✅ Verificación de integridad exitosa');
+                debugLog(' Verificación de integridad exitosa');
                 message.content = decryptedContent;
                 message.verified = true;
+                // Preservar user_ip y user_port para admins
+                // (ya vienen en el objeto message desde el backend)
+                if (message.user_ip) {
+                  debugLog(` Info del usuario: ${message.user_ip}:${message.user_port}`);
+                }
               } else {
-                console.error('❌ Verificación de integridad fallida');
-                message.content = '⚠️ Error: El mensaje puede haber sido alterado';
+                debugLog(' Verificación de integridad fallida');
+                message.content = ' Error: El mensaje puede haber sido alterado';
                 message.verified = false;
               }
               
-              console.log('🔓 Mensaje descifrado:', decryptedContent);
-              console.log('🔍 Hash original:', decryptedHash);
-              console.log('🔍 Hash calculado:', calculatedHash);
+              debugLog(' Mensaje descifrado:', decryptedContent);
+              debugLog(' Hash original:', decryptedHash);
+              debugLog(' Hash calculado:', calculatedHash);
             } catch (err) {
-              console.warn("Error al descifrar o verificar mensaje:", err);
+              debugLog(" Error al descifrar o verificar mensaje:", err);
               message.verified = false;
             }
           }
@@ -205,14 +255,14 @@ const ChatApp = () => {
             return [...prevMessages, message];
           });
         } catch (err) {
-          console.warn("Error al procesar mensaje:", err);
+          debugLog("Error al procesar mensaje:", err);
         }
       })();
     };    wsRef.current.onclose = (event) => {
       if (!event.wasClean) {
-        console.log('Conexión perdida. Código:', event.code, 'Razón:', event.reason || 'Sin razón especificada');
+        debugLog('Conexión perdida. Código:', event.code, 'Razón:', event.reason || 'Sin razón especificada');
       } else {
-        console.log('Conexión cerrada limpiamente. Código:', event.code, 'Razón:', event.reason);
+        debugLog('Conexión cerrada limpiamente. Código:', event.code, 'Razón:', event.reason);
       }
       setIsConnected(false);
       if (event.code !== 1000) { // Si no es un cierre voluntario
@@ -222,7 +272,7 @@ const ChatApp = () => {
     };
     
     wsRef.current.onerror = (error) => {
-      console.error('Error WebSocket:', error);
+      debugLog(' Error WebSocket:', error);
       setIsConnected(false);
     };
   };
@@ -230,7 +280,7 @@ const ChatApp = () => {
   // Login como admin
   const handleAdminLogin = async () => {
     try {
-      const response = await fetch(`http://${SERVER_IP}:${SERVER_PORT}/admin/login`, {
+      const response = await fetch(`${API_URL}/admin/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -242,18 +292,18 @@ const ChatApp = () => {
         setIsAdmin(true);
         setShowAdminLogin(false);
         setAdminPassword('');
-        connectWebSocket(true);
+        // Esperar a que el estado se actualice antes de conectar
+        setTimeout(() => connectWebSocket(true), 0);
       } else {
         alert('Contraseña incorrecta');
       }
     } catch (error) {
-      console.error('Error en login admin:', error);
+      debugLog('Error en login admin:', error);
       alert('Error al conectar con el servidor');
     }
   };
   
   // Enviar mensaje
-  // En la función sendMessage - AGREGAR ESTOS CONSOLE.LOG
   // Función para calcular SHA-256
   const calculateSHA256 = async (message) => {
     const encoder = new TextEncoder();
@@ -271,21 +321,21 @@ const ChatApp = () => {
 
     try {
       const messageText = newMessage.trim();
-      console.log("📤 Preparando mensaje:", {
+      debugLog(" Preparando mensaje:", {
         mensajeOriginal: messageText
       });
       
       // 1. Calcular hash SHA-256 del mensaje original
       const messageHash = await calculateSHA256(messageText);
-      console.log("🔍 Hash SHA-256:", messageHash);
+      debugLog(" Hash SHA-256:", messageHash);
       
       // 2. Cifrar el mensaje y el hash por separado
       let encryptedContent, encryptedHash;
       if (serverPublicKey) {
         encryptedContent = await encryptMessage(messageText, serverPublicKey);
         encryptedHash = await encryptMessage(messageHash, serverPublicKey);
-        console.log("🔒 Mensaje cifrado (RSA):", encryptedContent);
-        console.log("🔒 Hash cifrado (RSA):", encryptedHash);
+        debugLog(" Mensaje cifrado (RSA):", encryptedContent);
+        debugLog(" Hash cifrado (RSA):", encryptedHash);
       }
 
       // Verificar estado de la conexión antes de enviar
@@ -311,11 +361,11 @@ const ChatApp = () => {
         
         setNewMessage('');
       } else {
-        console.log("Reconectando...");
+        debugLog("Reconectando...");
         await connectWebSocket(isAdmin);
       }
     } catch (error) {
-      console.error("Error procesando mensaje:", error);
+      debugLog("Error procesando mensaje:", error);
       if (error.message.includes('WebSocket')) {
         setIsConnected(false);
         wsRef.current = null;
