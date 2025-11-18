@@ -51,7 +51,16 @@ SECRET_KEY = get_required_env("SECRET_KEY")
 RSA_KEY_SIZE = int(get_required_env("RSA_KEY_SIZE"))
 ALLOWED_ORIGINS = get_required_env("ALLOWED_ORIGINS").split(",")
 
-print(f"Configuración cargada correctamente")
+# Función para logs condicionales
+def debug_log(*args, **kwargs):
+    """Imprime logs solo en modo development"""
+    if ENVIRONMENT == "development":
+        print(*args, **kwargs)
+
+debug_log(f" Configuración cargada correctamente")
+debug_log(f" Entorno: {ENVIRONMENT}")
+debug_log(f" RSA Key Size: {RSA_KEY_SIZE}")
+debug_log(f" CORS Origins permitidos: {ALLOWED_ORIGINS}")
 
 app = FastAPI()
 app.add_middleware(
@@ -138,9 +147,9 @@ class ChatManager:
             # Aceptar nueva conexión
             await websocket.accept()
             
-            # Mostrar claves para debug (no lo hagas en producción)
-            print("Clave pública del servidor (PEM):")
-            print(self.get_public_key_pem())
+            # Mostrar claves para debug
+            debug_log("Clave pública del servidor (PEM):")
+            debug_log(self.get_public_key_pem())
 
             # info cliente
             client_host = websocket.client.host if websocket.client else "unknown"
@@ -159,18 +168,18 @@ class ChatManager:
                 "connected_at": datetime.now().isoformat()
             }
             
-            print(f"Usuario {'admin' if is_admin else 'regular'} conectado: {user_id} desde {client_host}:{client_port}")
+            debug_log(f"Usuario {'admin' if is_admin else 'regular'} conectado: {user_id} desde {client_host}:{client_port}")
             
             try:
                 # Enviar historial de mensajes al usuario que se conecta
                 for message in self.messages[-50:]:
                     await self.send_message_to_user(websocket, message, is_admin)
             except Exception as e:
-                print(f"Error enviando historial a {user_id}: {e}")
+                debug_log(f"Error enviando historial a {user_id}: {e}")
                 
             return True
         except Exception as e:
-            print(f"Error en conexión de {user_id}: {e}")
+            debug_log(f"Error en conexión de {user_id}: {e}")
             try:
                 await websocket.close(code=1011)  # 1011 = Internal Error
             except:
@@ -208,9 +217,9 @@ class ChatManager:
             try:
                 await ws_to_close.close(code=1000)
             except Exception as e:
-                print(f"Error al cerrar websocket de {user_id}: {e}")
+                debug_log(f"Error al cerrar websocket de {user_id}: {e}")
                 
-        print(f"Usuario desconectado: {user_id}")
+        debug_log(f"Usuario desconectado: {user_id}")
     
     async def send_message_to_user(self, websocket: WebSocket, message: Message, is_admin: bool):
         """Envía message (obj Message) ya preparado. Aquí se asume content en texto claro."""
@@ -281,7 +290,7 @@ class ChatManager:
                     }
                 regular_messages.append((uid, ws, json.dumps(payload)))
             except Exception as e:
-                print(f"Error preparando mensaje para {uid}: {e}")
+                debug_log(f"Error preparando mensaje para {uid}: {e}")
                 to_disconnect.add(uid)
 
         # Preparar mensajes para admins
@@ -321,7 +330,7 @@ class ChatManager:
                     }
                 admin_messages.append((uid, ws, json.dumps(payload)))
             except Exception as e:
-                print(f"Error preparando mensaje para admin {uid}: {e}")
+                debug_log(f"Error preparando mensaje para admin {uid}: {e}")
                 to_disconnect.add(uid)
 
         # Enviar mensajes
@@ -329,14 +338,14 @@ class ChatManager:
             try:
                 await ws.send_text(msg)
             except Exception as e:
-                print(f"Error enviando a {uid}: {e}")
+                debug_log(f"Error enviando a {uid}: {e}")
                 to_disconnect.add(uid)
 
         for uid, ws, msg in admin_messages:
             try:
                 await ws.send_text(msg)
             except Exception as e:
-                print(f"Error enviando a admin {uid}: {e}")
+                debug_log(f"Error enviando a admin {uid}: {e}")
                 to_disconnect.add(uid)
 
         # Desconectar usuarios con error al final
@@ -344,7 +353,7 @@ class ChatManager:
             try:
                 await self.disconnect(uid)
             except Exception as e:
-                print(f"Error al desconectar {uid}: {e}")# --- Instancia global ---
+                debug_log(f"Error al desconectar {uid}: {e}")# --- Instancia global ---
 chat_manager = ChatManager()
 
 # --- Endpoints HTTP ---
@@ -390,33 +399,33 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 data = json.loads(raw)
 
                 if data.get("type") == "message" and "content" in data and "hash" in data:
-                    print(f"\n=== MENSAJE RECIBIDO de {user_id} ===")
-                    print(f"Contenido cifrado: {data['content'][:100]}...")
-                    print(f"Hash cifrado: {data['hash'][:100]}...")
+                    debug_log(f"\n=== MENSAJE RECIBIDO de {user_id} ===")
+                    debug_log(f"Contenido cifrado: {data['content'][:100]}...")
+                    debug_log(f"Hash cifrado: {data['hash'][:100]}...")
 
                     try:
                         # Descifrar mensaje y hash
                         decrypted_content = chat_manager.decrypt_with_private_key(data["content"])
                         decrypted_hash = chat_manager.decrypt_with_private_key(data["hash"])
-                        print(f"✅ Mensaje descifrado (RSA): {decrypted_content}")
-                        print(f"✅ Hash descifrado (SHA-256): {decrypted_hash}")
+                        debug_log(f" Mensaje descifrado (RSA): {decrypted_content}")
+                        debug_log(f" Hash descifrado (SHA-256): {decrypted_hash}")
                         
                         await chat_manager.broadcast_message(decrypted_content, decrypted_hash, origin_user_id=user_id)
                     except Exception as e:
-                        print(f"❌ Error al descifrar mensaje/hash de {user_id}: {e}")
+                        debug_log(f" Error al descifrar mensaje/hash de {user_id}: {e}")
             except WebSocketDisconnect:
-                print(f"WebSocket desconectado: {user_id}")
+                debug_log(f"WebSocket desconectado: {user_id}")
                 await chat_manager.disconnect(user_id)
                 break
             except json.JSONDecodeError:
-                print(f"Error: Mensaje mal formado de {user_id}")
+                debug_log(f"Error: Mensaje mal formado de {user_id}")
                 continue
             except Exception as e:
-                print(f"Error procesando mensaje de {user_id}: {e}")
+                debug_log(f"Error procesando mensaje de {user_id}: {e}")
                 await chat_manager.disconnect(user_id)
                 break
     except Exception as e:
-        print(f"Error en el websocket de {user_id}: {e}")
+        debug_log(f"Error en el websocket de {user_id}: {e}")
         await chat_manager.disconnect(user_id)
 
     except WebSocketDisconnect:
@@ -446,10 +455,10 @@ async def admin_websocket_endpoint(websocket: WebSocket, user_id: str):
                 try:
                     decrypted_content = chat_manager.decrypt_with_private_key(data["content"])
                     decrypted_hash = chat_manager.decrypt_with_private_key(data["hash"])
-                    print(f"✅ Mensaje admin descifrado (RSA): {decrypted_content}")
-                    print(f"✅ Hash admin descifrado (SHA-256): {decrypted_hash}")
+                    debug_log(f" Mensaje admin descifrado (RSA): {decrypted_content}")
+                    debug_log(f" Hash admin descifrado (SHA-256): {decrypted_hash}")
                 except Exception as e:
-                    print(f"❌ Error al descifrar mensaje/hash de admin: {e}")
+                    debug_log(f" Error al descifrar mensaje/hash de admin: {e}")
                     return
 
                 await chat_manager.broadcast_message(decrypted_content, decrypted_hash, origin_user_id=admin_id)
