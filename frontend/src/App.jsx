@@ -2,9 +2,22 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Send, Lock, Eye, EyeOff } from 'lucide-react';
 
 const ChatApp = () => {
-  // Configuración del servidor 
-  const SERVER_IP = 'localhost';
-  const SERVER_PORT = '8000';
+  // Validar y cargar variables de entorno requeridas
+  const getRequiredEnv = (key) => {
+    const value = import.meta.env[key];
+    if (!value) {
+      throw new Error(
+        ` ERROR: Variable de entorno '${key}' no configurada.\n` +
+        `Por favor, configura el archivo .env con todas las variables requeridas.\n` +
+        `Consulta .env.example para ver el formato correcto.`
+      );
+    }
+    return value;
+  };
+
+  const WS_URL = getRequiredEnv('VITE_WS_URL');
+  const API_URL = getRequiredEnv('VITE_API_URL');
+  const DEBUG = import.meta.env.VITE_DEBUG === 'true';
   
   // Estados principales
   const [messages, setMessages] = useState([]);
@@ -45,7 +58,7 @@ const ChatApp = () => {
   // Función para cambiar el tipo de comunicación en el servidor
   const cambiarTipoComunicacionServidor = async (tipo) => {
     try {
-      const response = await fetch(`http://${SERVER_IP}:${SERVER_PORT}/tipo-comunicacion`, {
+      const response = await fetch(`${API_URL}/tipo-comunicacion`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -127,7 +140,7 @@ const ChatApp = () => {
 
     // Obtener la clave pública del servidor
     try {
-      const response = await fetch(`http://${SERVER_IP}:${SERVER_PORT}/public-key`);
+      const response = await fetch(`${API_URL}/public-key`);
       const data = await response.json();
       setServerPublicKey(data.public_key);
       console.log("🧩 Clave pública del servidor obtenida.");
@@ -135,9 +148,9 @@ const ChatApp = () => {
       console.error("Error obteniendo clave pública del servidor:", error);
     }
 
-    const wsUrl = asAdmin 
-      ? `ws://${SERVER_IP}:${SERVER_PORT}/ws/admin/${userId}`
-      : `ws://${SERVER_IP}:${SERVER_PORT}/ws/${userId}`;
+    const wsUrl = isAdmin
+      ? `${WS_URL}/ws/admin/${userId}`
+      : `${WS_URL}/ws/${userId}`;
     
     wsRef.current = new WebSocket(wsUrl);
     
@@ -230,7 +243,7 @@ const ChatApp = () => {
   // Login como admin
   const handleAdminLogin = async () => {
     try {
-      const response = await fetch(`http://${SERVER_IP}:${SERVER_PORT}/admin/login`, {
+      const response = await fetch(`${API_URL}/admin/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

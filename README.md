@@ -39,6 +39,45 @@ Versión actual con importantes mejoras en seguridad.
 Este proyecto incluye un backend en Python y un frontend en React.  
 A continuación se explican los pasos para ejecutar ambos entornos en tu máquina.
 
+## ⚙️ Configuración Inicial - Variables de Entorno
+
+### Backend
+Antes de ejecutar el backend, debes configurar las variables de entorno:
+
+1. Navega a la carpeta del backend:
+```bash
+cd backend
+```
+
+2. Copia el archivo de ejemplo `.env.example` y renómbralo a `.env`:
+```bash
+# Windows PowerShell
+Copy-Item .env.example .env
+
+# O manualmente copia y pega el archivo
+```
+
+3. Edita el archivo `.env` con tus valores de configuración:
+
+
+### Frontend
+Configura las variables de entorno del frontend:
+
+1. Navega a la carpeta del frontend:
+```bash
+cd frontend
+```
+
+2. Copia el archivo de ejemplo `.env.example` y renómbralo a `.env`:
+```bash
+# Windows PowerShell
+Copy-Item .env.example .env
+
+# O manualmente copia y pega el archivo
+```
+
+3. Edita el archivo `.env` con las URLs correctas:
+
 ## 1. Instalar Python
 ```bash
 # Ir a https://www.python.org/downloads/
@@ -86,8 +125,6 @@ npm install
 
 # Ejecutar servidor de desarrollo
 npm run dev
-
-npm install crypto-js
 
 # El frontend estará disponible en:
 # http://localhost:5173

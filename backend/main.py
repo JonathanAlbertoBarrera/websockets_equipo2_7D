@@ -6,6 +6,11 @@ import uuid
 from datetime import datetime
 from typing import Dict, List, Optional
 import base64
+import os
+from dotenv import load_dotenv
+
+# Cargar variables de entorno
+load_dotenv()
 
 # Crypto
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
@@ -25,13 +30,33 @@ class Message(BaseModel):
     user_ip: Optional[str] = None
     user_port: Optional[int] = None
 
-# Configuración
-ADMIN_PASSWORD = "admin123" 
+# Configuración desde variables de entorno
+def get_required_env(key: str):
+    """Obtiene una variable de entorno requerida. Falla si no existe."""
+    value = os.getenv(key)
+    
+    if value is None:
+        raise ValueError(
+            f"ERROR: Variable de entorno '{key}' no configurada.\n"
+            f"   Por favor, configura el archivo .env con todas las variables requeridas.\n"
+            f"   Consulta .env.example para ver el formato correcto."
+        )
+    
+    return value
+
+# Cargar variables de entorno requeridas
+ENVIRONMENT = get_required_env("ENVIRONMENT")
+ADMIN_PASSWORD = get_required_env("ADMIN_PASSWORD")
+SECRET_KEY = get_required_env("SECRET_KEY")
+RSA_KEY_SIZE = int(get_required_env("RSA_KEY_SIZE"))
+ALLOWED_ORIGINS = get_required_env("ALLOWED_ORIGINS").split(",")
+
+print(f"Configuración cargada correctamente")
 
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # en prod, restringir dominios
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -40,8 +65,11 @@ app.add_middleware(
 # --- ChatManager con RSA ---
 class ChatManager:
     def __init__(self):
-        # Generar claves RSA al crear la instancia del servidor
-        self.server_private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        # Generar claves RSA al crear la instancia del servidor usando el tamaño configurado
+        self.server_private_key = rsa.generate_private_key(
+            public_exponent=65537, 
+            key_size=RSA_KEY_SIZE
+        )
         self.server_public_key = self.server_private_key.public_key()
 
         self.connections: Dict[str, WebSocket] = {}
