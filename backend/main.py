@@ -51,6 +51,11 @@ SECRET_KEY = get_required_env("SECRET_KEY")
 RSA_KEY_SIZE = int(get_required_env("RSA_KEY_SIZE"))
 ALLOWED_ORIGINS = get_required_env("ALLOWED_ORIGINS").split(",")
 
+# SSL/TLS Configuration
+USE_SSL = os.getenv("USE_SSL", "false").lower() == "true"
+SSL_CERT_FILE = os.getenv("SSL_CERT_FILE", "ssl_cert.pem")
+SSL_KEY_FILE = os.getenv("SSL_KEY_FILE", "ssl_cert.key")
+
 # Función para logs condicionales
 def debug_log(*args, **kwargs):
     """Imprime logs solo en modo development"""
@@ -61,6 +66,10 @@ debug_log(f" Configuración cargada correctamente")
 debug_log(f" Entorno: {ENVIRONMENT}")
 debug_log(f" RSA Key Size: {RSA_KEY_SIZE}")
 debug_log(f" CORS Origins permitidos: {ALLOWED_ORIGINS}")
+debug_log(f" SSL/TLS: {'Habilitado' if USE_SSL else 'Deshabilitado'}")
+if USE_SSL:
+    debug_log(f" Certificado: {SSL_CERT_FILE}")
+    debug_log(f" Clave privada: {SSL_KEY_FILE}")
 
 app = FastAPI()
 app.add_middleware(
@@ -468,6 +477,50 @@ async def admin_websocket_endpoint(websocket: WebSocket, user_id: str):
 
 @app.get("/")
 async def root():
+    protocol = "HTTPS" if USE_SSL else "HTTP"
+    ws_protocol = "WSS" if USE_SSL else "WS"
     return {
-        "message": "Chat WebSocket Server está funcionando con cifrado RSA"
+        "message": f"Chat WebSocket Server está funcionando con cifrado RSA",
+        "protocol": protocol,
+        "websocket_protocol": ws_protocol,
+        "ssl_enabled": USE_SSL
     }
+
+# --- Ejecutar servidor con o sin SSL ---
+if __name__ == "__main__":
+    import uvicorn
+    
+    if USE_SSL:
+        # Verificar que existan los archivos de certificado
+        if not os.path.exists(SSL_CERT_FILE):
+            print(f" ERROR: No se encontró el archivo de certificado: {SSL_CERT_FILE}")
+            print("   Ejecuta: python generate_certs.py")
+            exit(1)
+        if not os.path.exists(SSL_KEY_FILE):
+            print(f" ERROR: No se encontró el archivo de clave privada: {SSL_KEY_FILE}")
+            print("   Ejecuta: python generate_certs.py")
+            exit(1)
+        
+        debug_log(f"\n Iniciando servidor con SSL/TLS...")
+        debug_log(f" URL: https://localhost:8000")
+        debug_log(f" WebSocket: wss://localhost:8000")
+        
+        uvicorn.run(
+            "main:app",
+            host="0.0.0.0",
+            port=8000,
+            ssl_keyfile=SSL_KEY_FILE,
+            ssl_certfile=SSL_CERT_FILE,
+            reload=True
+        )
+    else:
+        debug_log(f"\n  Iniciando servidor SIN SSL (desarrollo)")
+        debug_log(f" URL: http://localhost:8000")
+        debug_log(f" WebSocket: ws://localhost:8000")
+        
+        uvicorn.run(
+            "main:app",
+            host="0.0.0.0",
+            port=8000,
+            reload=True
+        )

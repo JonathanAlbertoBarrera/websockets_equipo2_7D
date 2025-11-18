@@ -5,3 +5,9 @@ venv/
 
 # Variables de entorno
 .env
+
+# Certificados SSL
+*.key
+*.pem
+*.crt
+ssl_cert.*
