@@ -111,3 +111,13 @@ input:focus {
   border-color: #3b82f6;
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
 }
+
+.botoncitoInsano{
+  background-color: #34D399; /* Verde menta */
+  color: white;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  font-weight: bold;
+  border: 2px solid #10B981; /* Verde esmeralda */
+  transition: background-color 0.3s, border-color 0.3s;
+}

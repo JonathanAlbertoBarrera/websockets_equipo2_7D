@@ -40,3 +40,61 @@
 .read-the-docs {
   color: #888;
 }
+
+.encryption-indicator {
+  margin-left: 5px;
+  font-size: 0.8em;
+}
+
+.message-content {
+  display: flex;
+  align-items: center;
+}
+
+/* Estilos para los diferentes tipos de mensajes */
+.message.encrypted-symmetric .encryption-indicator {
+  color: #4CAF50;  /* Verde para simétrico */
+}
+
+.message.encrypted-asymmetric .encryption-indicator {
+  color: #2196F3;  /* Azul para asimétrico */
+}
+
+/* Animaciones para notificaciones estilo SweetAlert */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    transform: scale(0.8);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
+  20%, 40%, 60%, 80% { transform: translateX(5px); }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.2s ease-out;
+}
+
+.animate-scaleIn {
+  animation: scaleIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.animate-shake {
+  animation: shake 0.5s ease-in-out;
+}
