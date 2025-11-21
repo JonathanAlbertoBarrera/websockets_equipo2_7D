@@ -67,6 +67,7 @@ const ChatApp = () => {
   const [showMyFiles, setShowMyFiles] = useState(false);
   const [previewFile, setPreviewFile] = useState(null);
   const [showPreview, setShowPreview] = useState(false);
+  const [toastMessage, setToastMessage] = useState(null);
   
   // Referencias
   const wsRef = useRef(null);
@@ -86,6 +87,22 @@ const ChatApp = () => {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // Sistema de notificaciones toast
+  const showToast = (message, type = 'success') => {
+    setToastMessage({ text: message, type });
+    setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  // Traducir estados de firma
+  const translateStatus = (status) => {
+    const translations = {
+      'pending': 'Pendiente',
+      'partially_signed': 'Parcialmente Firmado',
+      'fully_signed': 'Completamente Firmado'
+    };
+    return translations[status] || status;
+  };
   
   // Generar ID único para el usuario
   useEffect(() => {
@@ -344,14 +361,15 @@ const ChatApp = () => {
         setIsAdmin(true);
         setShowAdminLogin(false);
         setAdminPassword('');
+        showToast('Sesión de administrador iniciada correctamente', 'success');
         // Esperar a que el estado se actualice antes de conectar
         setTimeout(() => connectWebSocket(true), 0);
       } else {
-        alert('Contraseña incorrecta');
+        showToast('Contraseña incorrecta', 'error');
       }
     } catch (error) {
       debugLog('Error en login admin:', error);
-      alert('Error al conectar con el servidor');
+      showToast('Error al conectar con el servidor', 'error');
     }
   };
   
@@ -422,7 +440,7 @@ const ChatApp = () => {
         setIsConnected(false);
         wsRef.current = null;
       }
-      alert("Error al enviar el mensaje. Intenta reconectarte.");
+      showToast("Error al enviar el mensaje. Intenta reconectarte.", 'error');
     }
   };
   
@@ -466,7 +484,7 @@ const ChatApp = () => {
 
   const uploadFile = async () => {
     if (!selectedFile) {
-      alert('Selecciona un archivo');
+      showToast('Por favor selecciona un archivo', 'error');
       return;
     }
 
@@ -484,17 +502,17 @@ const ChatApp = () => {
 
       if (response.ok) {
         const data = await response.json();
-        alert(`Archivo subido: ${data.filename}`);
+        showToast(`Archivo subido: ${data.filename}`, 'success');
         setShowFileUpload(false);
         setSelectedFile(null);
         setSelectedSigners([]);
         fetchUploadedFiles(); // Refrescar lista
       } else {
-        alert('Error al subir archivo');
+        showToast('Error al subir archivo', 'error');
       }
     } catch (error) {
       debugLog('Error subiendo archivo:', error);
-      alert('Error al subir archivo');
+      showToast('Error al subir archivo', 'error');
     }
   };
 
@@ -510,16 +528,16 @@ const ChatApp = () => {
 
       if (response.ok) {
         const data = await response.json();
-        alert(`Archivo firmado: ${data.file_id}`);
+        showToast(`Archivo firmado correctamente`, 'success');
         // Remover de pendientes
         setPendingFiles(prev => prev.filter(f => f.file_id !== fileId));
       } else {
         const error = await response.json();
-        alert(`Error: ${error.detail}`);
+        showToast(`Error: ${error.detail}`, 'error');
       }
     } catch (error) {
       debugLog('Error firmando archivo:', error);
-      alert('Error al firmar archivo');
+      showToast('Error al firmar archivo', 'error');
     }
   };
 
@@ -571,8 +589,8 @@ const ChatApp = () => {
             
             <div className="flex items-center space-x-4">
               {/* Indicador de cifrado RSA */}
-              <div className="px-4 py-2 rounded-lg font-semibold bg-purple-600 text-black">
-                🔒 RSA-2048
+              <div className="px-4 py-2 rounded-lg font-semibold bg-purple-600 text-white">
+                RSA-2048
               </div>
               
               <div className="flex items-center space-x-2">
@@ -615,7 +633,7 @@ const ChatApp = () => {
                         setServerPublicKey(null);
                       }
                     }}
-                    className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm"
+                    className="bg-red-600 hover:bg-red-700 text-black px-3 py-1 rounded text-sm"
                   >
                     Desconectar
                   </button>
@@ -665,7 +683,7 @@ const ChatApp = () => {
         {fileNotifications.length > 0 && (
           <div className="bg-yellow-50 border-x border-yellow-200 p-3">
             <div className="flex justify-between items-center mb-2">
-              <h3 className="font-semibold text-yellow-800 text-sm">📋 Notificaciones de Firma</h3>
+              <h3 className="font-semibold text-yellow-800 text-sm">Notificaciones de Firma</h3>
               <button
                 onClick={() => setFileNotifications([])}
                 className="text-xs text-yellow-600 hover:text-yellow-800"
@@ -687,17 +705,17 @@ const ChatApp = () => {
         {isConnected && (
           <div className="bg-white border-x p-4 border-b">
             <div className="flex justify-between items-center mb-3">
-              <h3 className="font-semibold text-gray-800">✍️ Firma Digital Colaborativa</h3>
+              <h3 className="font-semibold text-gray-800">Firma Digital Colaborativa</h3>
               <div className="flex space-x-2">
                 <button
                   onClick={() => setShowMyFiles(!showMyFiles)}
-                  className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1 rounded text-sm"
+                  className="bg-purple-600 hover:bg-purple-700 text-black px-3 py-1 rounded text-sm"
                 >
-                  {showMyFiles ? 'Ocultar' : '📁 Mis Archivos'}
+                  {showMyFiles ? 'Ocultar' : 'Mis Archivos'}
                 </button>
                 <button
                   onClick={() => setShowFileUpload(!showFileUpload)}
-                  className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm"
+                  className="bg-green-600 hover:bg-green-700 text-black px-3 py-1 rounded text-sm"
                 >
                   {showFileUpload ? 'Cancelar' : '+ Subir Archivo'}
                 </button>
@@ -707,18 +725,18 @@ const ChatApp = () => {
             {/* Mis Archivos Subidos */}
             {showMyFiles && uploadedFiles.length > 0 && (
               <div className="bg-purple-50 p-4 rounded-lg border border-purple-200 mb-3">
-                <h4 className="font-semibold text-purple-800 mb-3">📁 Mis Archivos</h4>
+                <h4 className="font-semibold text-purple-800 mb-3">Mis Archivos</h4>
                 <div className="space-y-2 max-h-64 overflow-y-auto">
                   {uploadedFiles.map(file => (
                     <div key={file.file_id} className="flex justify-between items-center bg-white p-3 rounded border">
                       <div className="flex-1">
-                        <p className="font-semibold text-sm">📄 {file.filename}</p>
+                        <p className="font-semibold text-sm">{file.filename}</p>
                         <p className="text-xs text-gray-600">
                           Estado: <span className={`font-semibold ${
-                            file.status === 'fully_signed' ? 'text-green-600' :
-                            file.status === 'partially_signed' ? 'text-yellow-600' :
+                            file.status === 'Firmado por todos los usuarios que se requerian' ? 'text-green-600' :
+                            file.status === 'Faltan usuarios por firmar' ? 'text-yellow-600' :
                             'text-blue-600'
-                          }`}>{file.status}</span>
+                          }`}>{translateStatus(file.status)}</span>
                         </p>
                         <p className="text-xs text-gray-500">
                           Firmantes: {file.completed_signers.length}/{file.allowed_signers.length}
@@ -727,17 +745,17 @@ const ChatApp = () => {
                       <div className="flex space-x-2">
                         <button
                           onClick={() => openPreview(file.file_id, file.filename, file.file_type)}
-                          className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded text-sm"
+                          className="bg-indigo-600 hover:bg-indigo-700 text-black px-3 py-1 rounded text-sm"
                           title="Vista previa"
                         >
-                          👁️ Ver
+                          Ver
                         </button>
                         <button
                           onClick={() => downloadFile(file.file_id, file.filename)}
                           className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm"
                           title="Descargar archivo"
                         >
-                          ⬇️ Descargar
+                          Descargar
                         </button>
                       </div>
                     </div>
@@ -757,7 +775,7 @@ const ChatApp = () => {
                   className="mb-3 text-sm"
                 />
                 {selectedFile && (
-                  <p className="text-sm text-gray-600 mb-3">📄 {selectedFile.name}</p>
+                  <p className="text-sm text-gray-600 mb-3">{selectedFile.name}</p>
                 )}
                 
                 <h5 className="font-semibold text-sm text-gray-700 mb-2">Seleccionar Firmantes:</h5>
@@ -770,7 +788,7 @@ const ChatApp = () => {
                         onChange={() => toggleSignerSelection(user.user_id)}
                         className="rounded"
                       />
-                      <span>{user.user_id} {user.is_admin && '👑'}</span>
+                      <span>{user.user_id} {user.is_admin && '(Admin)'}</span>
                     </label>
                   ))}
                   {connectedUsers.length === 1 && (
@@ -781,7 +799,7 @@ const ChatApp = () => {
                 <button
                   onClick={uploadFile}
                   disabled={!selectedFile || selectedSigners.length === 0}
-                  className="bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white px-4 py-2 rounded text-sm w-full"
+                  className="bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-black px-4 py-2 rounded text-sm w-full"
                 >
                   Subir y Solicitar Firmas
                 </button>
@@ -791,7 +809,7 @@ const ChatApp = () => {
             {/* Archivos Pendientes de Firma */}
             {pendingFiles.length > 0 && (
               <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
-                <h4 className="font-semibold text-blue-800 mb-3">📝 Archivos Pendientes de Firma</h4>
+                <h4 className="font-semibold text-blue-800 mb-3">Archivos Pendientes de Firma</h4>
                 <div className="space-y-2">
                   {pendingFiles.map(file => (
                     <div key={file.file_id} className="flex justify-between items-center bg-white p-3 rounded border">
@@ -805,13 +823,13 @@ const ChatApp = () => {
                           className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded text-sm"
                           title="Vista previa"
                         >
-                          👁️ Ver
+                          Ver
                         </button>
                         <button
                           onClick={() => signFile(file.file_id)}
                           className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm"
                         >
-                          ✍️ Firmar
+                          Firmar
                         </button>
                       </div>
                     </div>
@@ -885,6 +903,17 @@ const ChatApp = () => {
           </div>
         </div>
       </div>
+
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className={`fixed top-4 right-4 z-50 px-6 py-4 rounded-lg shadow-lg transform transition-all duration-300 ${
+          toastMessage.type === 'success' ? 'bg-green-500' :
+          toastMessage.type === 'error' ? 'bg-red-500' :
+          'bg-blue-500'
+        } text-white font-semibold`}>
+          {toastMessage.text}
+        </div>
+      )}
     </div>
   );
 };
