@@ -56,6 +56,18 @@ const ChatApp = () => {
   const [privateKey, setPrivateKey] = useState(null);
   const [serverPublicKey, setServerPublicKey] = useState(null);
   
+  // ---- Firma Digital ----
+  const [connectedUsers, setConnectedUsers] = useState([]);
+  const [pendingFiles, setPendingFiles] = useState([]);
+  const [fileNotifications, setFileNotifications] = useState([]);
+  const [showFileUpload, setShowFileUpload] = useState(false);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedSigners, setSelectedSigners] = useState([]);
+  const [uploadedFiles, setUploadedFiles] = useState([]);
+  const [showMyFiles, setShowMyFiles] = useState(false);
+  const [previewFile, setPreviewFile] = useState(null);
+  const [showPreview, setShowPreview] = useState(false);
+  
   // Referencias
   const wsRef = useRef(null);
   const messagesEndRef = useRef(null);
@@ -81,6 +93,24 @@ const ChatApp = () => {
       setUserId(`user_${Date.now()}_${Math.floor(Math.random() * 1000)}`);
     }
   }, []);
+
+  // Actualizar lista de usuarios conectados periódicamente
+  useEffect(() => {
+    if (isConnected) {
+      fetchConnectedUsers();
+      fetchUploadedFiles();
+      const interval = setInterval(() => {
+        fetchConnectedUsers();
+        fetchUploadedFiles();
+      }, 3000);
+      return () => clearInterval(interval);
+    }
+  }, [isConnected]);
+
+  // Debug modal de vista previa
+  useEffect(() => {
+    debugLog('👀 Estado modal:', { showPreview, previewFile });
+  }, [showPreview, previewFile]);
 
   // Función para cambiar el tipo de comunicación en el servidor
   const cambiarTipoComunicacionServidor = async (tipo) => {
@@ -209,6 +239,28 @@ const ChatApp = () => {
       
       (async () => {
         try {
+          // Manejar notificaciones de firma digital
+          if (message.type === 'signature_invitation') {
+            debugLog(' Invitación de firma recibida:', message);
+            setPendingFiles(prev => [...prev, message]);
+            setFileNotifications(prev => [...prev, {
+              id: Date.now(),
+              text: `${message.invited_by} te invitó a firmar: ${message.filename}`,
+              fileId: message.file_id
+            }]);
+            return;
+          }
+
+          if (message.type === 'signature_performed') {
+            debugLog('⚡ Firma realizada:', message);
+            setFileNotifications(prev => [...prev, {
+              id: Date.now(),
+              text: `${message.signed_by} firmó: ${message.filename} (${message.status})`,
+              fileId: message.file_id
+            }]);
+            return;
+          }
+
           if (message.encrypted && privateKey) {
             debugLog(' Mensaje cifrado recibido:', message.content);
             debugLog(' Hash cifrado recibido:', message.hash);
@@ -389,6 +441,121 @@ const ChatApp = () => {
     });
   };
 
+  // ---- Funciones de Firma Digital ----
+  const fetchConnectedUsers = async () => {
+    try {
+      const response = await fetch(`${API_URL}/admin/users`);
+      const data = await response.json();
+      setConnectedUsers(data.users || []);
+      debugLog('Usuarios conectados:', data.users);
+    } catch (error) {
+      debugLog('Error obteniendo usuarios conectados:', error);
+    }
+  };
+
+  const fetchUploadedFiles = async () => {
+    try {
+      const response = await fetch(`${API_URL}/api/list-files?user_id=${userId}`);
+      const data = await response.json();
+      setUploadedFiles(data.files || []);
+      debugLog('Archivos del usuario:', data.files);
+    } catch (error) {
+      debugLog('Error obteniendo archivos:', error);
+    }
+  };
+
+  const uploadFile = async () => {
+    if (!selectedFile) {
+      alert('Selecciona un archivo');
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+    formData.append('allowed_signers', JSON.stringify(selectedSigners));
+    formData.append('require_all_signers', 'true');
+    formData.append('user_id', userId);
+
+    try {
+      const response = await fetch(`${API_URL}/api/upload-file`, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        alert(`Archivo subido: ${data.filename}`);
+        setShowFileUpload(false);
+        setSelectedFile(null);
+        setSelectedSigners([]);
+        fetchUploadedFiles(); // Refrescar lista
+      } else {
+        alert('Error al subir archivo');
+      }
+    } catch (error) {
+      debugLog('Error subiendo archivo:', error);
+      alert('Error al subir archivo');
+    }
+  };
+
+  const signFile = async (fileId) => {
+    try {
+      const formData = new FormData();
+      formData.append('signer_id', userId);
+
+      const response = await fetch(`${API_URL}/api/sign-file/${fileId}`, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        alert(`Archivo firmado: ${data.file_id}`);
+        // Remover de pendientes
+        setPendingFiles(prev => prev.filter(f => f.file_id !== fileId));
+      } else {
+        const error = await response.json();
+        alert(`Error: ${error.detail}`);
+      }
+    } catch (error) {
+      debugLog('Error firmando archivo:', error);
+      alert('Error al firmar archivo');
+    }
+  };
+
+  const toggleSignerSelection = (userId) => {
+    setSelectedSigners(prev => {
+      if (prev.includes(userId)) {
+        return prev.filter(id => id !== userId);
+      } else {
+        return [...prev, userId];
+      }
+    });
+  };
+
+  const downloadFile = (fileId, filename) => {
+    const url = `${API_URL}/api/download-file/${fileId}`;
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const openPreview = (fileId, filename, fileType) => {
+    debugLog('👁️ Abriendo vista previa:', { fileId, filename, fileType });
+    // Abrir en nueva pestaña
+    const url = `${API_URL}/api/preview-file/${fileId}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const closePreview = () => {
+    debugLog('✖ Cerrando vista previa');
+    setShowPreview(false);
+    setPreviewFile(null);
+  };
+
 
   
   return (
@@ -493,6 +660,167 @@ const ChatApp = () => {
             </div>
           )}
         </div>
+
+        {/* Notificaciones de Firma */}
+        {fileNotifications.length > 0 && (
+          <div className="bg-yellow-50 border-x border-yellow-200 p-3">
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="font-semibold text-yellow-800 text-sm">📋 Notificaciones de Firma</h3>
+              <button
+                onClick={() => setFileNotifications([])}
+                className="text-xs text-yellow-600 hover:text-yellow-800"
+              >
+                Limpiar
+              </button>
+            </div>
+            <div className="space-y-1 max-h-32 overflow-y-auto">
+              {fileNotifications.map(notif => (
+                <div key={notif.id} className="text-sm text-yellow-700 bg-yellow-100 p-2 rounded">
+                  {notif.text}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Panel de Firma Digital */}
+        {isConnected && (
+          <div className="bg-white border-x p-4 border-b">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="font-semibold text-gray-800">✍️ Firma Digital Colaborativa</h3>
+              <div className="flex space-x-2">
+                <button
+                  onClick={() => setShowMyFiles(!showMyFiles)}
+                  className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1 rounded text-sm"
+                >
+                  {showMyFiles ? 'Ocultar' : '📁 Mis Archivos'}
+                </button>
+                <button
+                  onClick={() => setShowFileUpload(!showFileUpload)}
+                  className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm"
+                >
+                  {showFileUpload ? 'Cancelar' : '+ Subir Archivo'}
+                </button>
+              </div>
+            </div>
+
+            {/* Mis Archivos Subidos */}
+            {showMyFiles && uploadedFiles.length > 0 && (
+              <div className="bg-purple-50 p-4 rounded-lg border border-purple-200 mb-3">
+                <h4 className="font-semibold text-purple-800 mb-3">📁 Mis Archivos</h4>
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {uploadedFiles.map(file => (
+                    <div key={file.file_id} className="flex justify-between items-center bg-white p-3 rounded border">
+                      <div className="flex-1">
+                        <p className="font-semibold text-sm">📄 {file.filename}</p>
+                        <p className="text-xs text-gray-600">
+                          Estado: <span className={`font-semibold ${
+                            file.status === 'fully_signed' ? 'text-green-600' :
+                            file.status === 'partially_signed' ? 'text-yellow-600' :
+                            'text-blue-600'
+                          }`}>{file.status}</span>
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          Firmantes: {file.completed_signers.length}/{file.allowed_signers.length}
+                        </p>
+                      </div>
+                      <div className="flex space-x-2">
+                        <button
+                          onClick={() => openPreview(file.file_id, file.filename, file.file_type)}
+                          className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded text-sm"
+                          title="Vista previa"
+                        >
+                          👁️ Ver
+                        </button>
+                        <button
+                          onClick={() => downloadFile(file.file_id, file.filename)}
+                          className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm"
+                          title="Descargar archivo"
+                        >
+                          ⬇️ Descargar
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Formulario de Subida */}
+            {showFileUpload && (
+              <div className="bg-green-50 p-4 rounded-lg border border-green-200 mb-3">
+                <h4 className="font-semibold text-green-800 mb-3">Subir Archivo para Firma</h4>
+                <input
+                  type="file"
+                  accept=".pdf,.txt,.zip"
+                  onChange={(e) => setSelectedFile(e.target.files[0])}
+                  className="mb-3 text-sm"
+                />
+                {selectedFile && (
+                  <p className="text-sm text-gray-600 mb-3">📄 {selectedFile.name}</p>
+                )}
+                
+                <h5 className="font-semibold text-sm text-gray-700 mb-2">Seleccionar Firmantes:</h5>
+                <div className="space-y-2 mb-3 max-h-32 overflow-y-auto">
+                  {connectedUsers.filter(u => u.user_id !== userId).map(user => (
+                    <label key={user.user_id} className="flex items-center space-x-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={selectedSigners.includes(user.user_id)}
+                        onChange={() => toggleSignerSelection(user.user_id)}
+                        className="rounded"
+                      />
+                      <span>{user.user_id} {user.is_admin && '👑'}</span>
+                    </label>
+                  ))}
+                  {connectedUsers.length === 1 && (
+                    <p className="text-sm text-gray-500">No hay otros usuarios conectados</p>
+                  )}
+                </div>
+
+                <button
+                  onClick={uploadFile}
+                  disabled={!selectedFile || selectedSigners.length === 0}
+                  className="bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white px-4 py-2 rounded text-sm w-full"
+                >
+                  Subir y Solicitar Firmas
+                </button>
+              </div>
+            )}
+
+            {/* Archivos Pendientes de Firma */}
+            {pendingFiles.length > 0 && (
+              <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                <h4 className="font-semibold text-blue-800 mb-3">📝 Archivos Pendientes de Firma</h4>
+                <div className="space-y-2">
+                  {pendingFiles.map(file => (
+                    <div key={file.file_id} className="flex justify-between items-center bg-white p-3 rounded border">
+                      <div>
+                        <p className="font-semibold text-sm">{file.filename}</p>
+                        <p className="text-xs text-gray-600">Subido por: {file.invited_by}</p>
+                      </div>
+                      <div className="flex space-x-2">
+                        <button
+                          onClick={() => openPreview(file.file_id, file.filename, file.filename.split('.').pop())}
+                          className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded text-sm"
+                          title="Vista previa"
+                        >
+                          👁️ Ver
+                        </button>
+                        <button
+                          onClick={() => signFile(file.file_id)}
+                          className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm"
+                        >
+                          ✍️ Firmar
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         
         {/* Área de mensajes */}
         <div className="bg-white shadow-lg border-x h-96 overflow-y-auto p-4">
