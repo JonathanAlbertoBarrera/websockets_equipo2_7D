@@ -11,7 +11,7 @@ Esta versión inicial implementó la funcionalidad básica del chat en tiempo re
 - Interfaz de administrador para monitoreo
 - Historial de mensajes
 - Sin necesidad de actualizar la página
-⚠️ **Nota:** Los mensajes se transmiten sin cifrado en esta versión.
+ **Nota:** Los mensajes se transmiten sin cifrado en esta versión.
 
 ### Versión 2 - Implementación de Cifrado Dual
 **MD5:** 82d169fcdf9dcf822a638e583f95996c
@@ -35,10 +35,10 @@ Versión con importantes mejoras en seguridad.
 - Garantía de que los mensajes no han sido alterados durante la transmisión
 - Mayor confiabilidad en la comunicación
 
-### Versión 4 - Hardening y SSL/TLS (Versión Actual)
+### Versión 4 - Hardening y SSL/TLS
 **MD5:** 11ff91434407dec5a915893240be21bd
 
-Versión actual enfocada en seguridad profesional y mejores prácticas de desarrollo.
+Versión enfocada en seguridad profesional y mejores prácticas de desarrollo.
 **Ventajas de usar SSL/TLS:**
 -  Comunicación cifrada entre cliente y servidor
 - WebSocket Secure (WSS) para mensajes en tiempo real
@@ -65,12 +65,56 @@ Versión actual enfocada en seguridad profesional y mejores prácticas de desarr
   - CORS configurable por dominio
   - Tamaño de claves RSA ajustable (2048/3072/4096 bits)
 
+### Versión 5 - Sistema de Firma Digital Colaborativa (Versión Actual)
+**MD5:** 07299d9e2156de069f71523f2dc7ec95
+
+Versión actual con sistema completo de firma digital colaborativa y mejoras en la experiencia de usuario.
+
+**Funcionalidades de Firma Digital:**
+- **Subida de Archivos**: 
+  - Soporte para múltiples formatos (PDF, TXT, ZIP)
+  - Selección de firmantes autorizados
+  - Notificaciones en tiempo real vía WebSocket
+  
+- **Firma Digital Real**:
+  - Generación de firmas digitales con SHA-256
+  - Para PDFs: Agrega página de firma con ReportLab con información de todos los firmantes
+  - Para TXT: Anexa bloque de firmas al final del documento
+  - Timestamp y datos del firmante en cada firma
+  
+- **Gestión de Permisos**:
+  - Solo usuarios autorizados pueden firmar
+  - El uploader y firmantes seleccionados pueden visualizar archivos
+  - Control de estados: Pendiente, Parcialmente Firmado, Completamente Firmado
+  
+- **Visualización y Descarga**:
+  - Vista previa de archivos en navegador (nueva pestaña)
+  - Descarga de archivos firmados
+  - Lista de "Mis Archivos" y "Archivos Pendientes de Firma"
+
+**Mejoras en UX/UI:**
+- **Interfaz Moderna sin Emojis**: 
+  - Diseño limpio y profesional
+  
+- **Sistema de Notificaciones con SweetAlert2**:
+  - Modales elegantes centrados en pantalla
+  - Iconos animados según tipo (éxito/error/info)
+  - Auto-cierre inteligente (3s para éxitos, manual para errores)
+  - Barra de progreso visual del timer
+  
+
+**Beneficios Técnicos:**
+- Integración de PyPDF2 y ReportLab para manipulación de PDFs
+- Sistema de permisos granular por archivo
+- WebSocket para notificaciones en tiempo real de firmas
+- Arquitectura preparada para escalabilidad
+
 ---
 
 Este proyecto incluye un backend en Python y un frontend en React.  
 A continuación se explican los pasos para ejecutar ambos entornos en tu máquina.
 
-## ⚙️ Configuración Inicial - Variables de Entorno
+##  Configuración Inicial - Variables de Entorno
 
 ### Backend
 Antes de ejecutar el backend, debes configurar las variables de entorno:
@@ -140,7 +184,7 @@ Esto creará dos archivos:
 - `ssl_cert.pem` - Certificado SSL
 - `ssl_cert.key` - Clave privada
 
-⚠️ **NOTA IMPORTANTE**: Estos certificados son para **desarrollo local** solamente. El navegador mostrará una advertencia de seguridad que debes aceptar.
+ **NOTA IMPORTANTE**: Estos certificados son para **desarrollo local** solamente. El navegador mostrará una advertencia de seguridad que debes aceptar.
 
 ### 2.2. Iniciar el servidor
 
