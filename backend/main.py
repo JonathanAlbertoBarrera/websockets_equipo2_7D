@@ -1,6 +1,8 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Form, Depends
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Any
 import json
 import uuid
 from datetime import datetime
@@ -18,6 +20,7 @@ from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from base64 import b64encode, b64decode
 
+
 # --- Modelos ---
 class LoginRequest(BaseModel):
     password: str
@@ -29,6 +32,196 @@ class Message(BaseModel):
     user_id: str
     user_ip: Optional[str] = None
     user_port: Optional[int] = None
+
+# --- Firma digital colaborativa ---
+class FileUploadRequest(BaseModel):
+    filename: str
+    file_type: str
+    allowed_signers: List[str]  # ['user123', 'admin456'] o ['all'] o ['admins']
+    require_all_signers: bool = True
+
+class FileSignatureStatus(BaseModel):
+    file_id: str
+    original_uploader: str
+    allowed_signers: List[str]
+    completed_signers: List[str]
+    pending_signers: List[str]
+    status: str  # 'pending', 'partially_signed', 'fully_signed'
+
+class SignatureAction(BaseModel):
+    file_id: str
+    signer_id: str
+    timestamp: datetime
+    signature_data: str  # Firma criptográfica
+
+
+# --- Estructuras en memoria ---
+file_permissions: Dict[str, dict] = {}  # {file_id: {allowed_signers: [...]}}
+file_signature_status: Dict[str, FileSignatureStatus] = {}
+file_signature_history: Dict[str, List[SignatureAction]] = {}
+
+# --- Notificaciones WebSocket de firmas ---
+import asyncio
+async def notify_signers_invitation(file_id: str, filename: str, invited_by: str, allowed_signers: list):
+    """
+    Notifica a los firmantes seleccionados que tienen un documento pendiente de firma.
+    """
+    payload = {
+        "type": "signature_invitation",
+        "file_id": file_id,
+        "filename": filename,
+        "invited_by": invited_by,
+        "allowed_signers": allowed_signers
+    }
+    # Notificar solo a los usuarios conectados y autorizados
+    for user_id in allowed_signers:
+        ws = chat_manager.connections.get(user_id) or chat_manager.admin_connections.get(user_id)
+        if ws:
+            try:
+                await ws.send_text(json.dumps(payload))
+            except Exception as e:
+                debug_log(f"Error notificando invitación de firma a {user_id}: {e}")
+
+async def notify_signature_performed(file_id: str, signed_by: str, remaining_signers: list):
+    """
+    Notifica a todos los firmantes y al subidor sobre una nueva firma realizada.
+    """
+    status = file_signature_status[file_id]
+    filename = file_permissions[file_id]["filename"]
+    original_uploader = file_permissions[file_id]["original_uploader"]
+    payload = {
+        "type": "signature_performed",
+        "file_id": file_id,
+        "filename": filename,
+        "signed_by": signed_by,
+        "remaining_signers": remaining_signers,
+        "status": status.status
+    }
+    # Notificar a todos los firmantes y al uploader
+    notified = set()
+    for user_id in status.allowed_signers + [original_uploader]:
+        if user_id in notified:
+            continue
+        ws = chat_manager.connections.get(user_id) or chat_manager.admin_connections.get(user_id)
+        if ws:
+            try:
+                await ws.send_text(json.dumps(payload))
+                notified.add(user_id)
+            except Exception as e:
+                debug_log(f"Error notificando firma a {user_id}: {e}")
+
+import shutil
+from PyPDF2 import PdfReader, PdfWriter
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+from io import BytesIO
+
+# --- Funciones de Firma Real ---
+def add_signature_page_to_pdf(input_path: str, output_path: str, signatures: List[SignatureAction], file_id: str):
+    """
+    Agrega una página final al PDF con todas las firmas digitales.
+    """
+    try:
+        # Leer PDF original
+        reader = PdfReader(input_path)
+        writer = PdfWriter()
+        
+        # Copiar todas las páginas originales
+        for page in reader.pages:
+            writer.add_page(page)
+        
+        # Crear página de firmas con ReportLab
+        packet = BytesIO()
+        can = canvas.Canvas(packet, pagesize=letter)
+        width, height = letter
+        
+        # Título
+        can.setFont("Helvetica-Bold", 16)
+        can.drawString(50, height - 50, "PÁGINA DE FIRMAS DIGITALES")
+        can.setFont("Helvetica", 10)
+        can.drawString(50, height - 70, f"ID del Documento: {file_id}")
+        
+        # Línea separadora
+        can.line(50, height - 80, width - 50, height - 80)
+        
+        # Listar todas las firmas
+        y_position = height - 110
+        can.setFont("Helvetica-Bold", 12)
+        can.drawString(50, y_position, "Firmantes:")
+        y_position -= 25
+        
+        can.setFont("Helvetica", 10)
+        for idx, sig in enumerate(signatures, 1):
+            if y_position < 100:  # Si no hay espacio, crear nueva página
+                can.showPage()
+                y_position = height - 50
+            
+            can.setFont("Helvetica-Bold", 11)
+            can.drawString(50, y_position, f"{idx}. {sig.signer_id}")
+            y_position -= 18
+            
+            can.setFont("Helvetica", 9)
+            can.drawString(70, y_position, f"Fecha: {sig.timestamp.strftime('%d/%m/%Y %H:%M:%S')}")
+            y_position -= 15
+            can.drawString(70, y_position, f"Firma Digital: {sig.signature_data[:60]}...")
+            y_position -= 25
+        
+        # Footer
+        can.setFont("Helvetica-Oblique", 8)
+        can.drawString(50, 30, f"Documento firmado digitalmente - Total de firmas: {len(signatures)}")
+        can.drawString(50, 20, f"Generado: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+        
+        can.save()
+        packet.seek(0)
+        
+        # Agregar página de firmas al PDF
+        signature_page = PdfReader(packet)
+        writer.add_page(signature_page.pages[0])
+        
+        # Guardar PDF con firmas
+        with open(output_path, 'wb') as output_file:
+            writer.write(output_file)
+        
+        return True
+    except Exception as e:
+        debug_log(f"Error agregando página de firmas al PDF: {e}")
+        return False
+
+def add_signatures_to_txt(input_path: str, output_path: str, signatures: List[SignatureAction], file_id: str):
+    """
+    Agrega un bloque de firmas al final del archivo TXT.
+    """
+    try:
+        # Leer contenido original
+        with open(input_path, 'r', encoding='utf-8') as f:
+            original_content = f.read()
+        
+        # Crear bloque de firmas
+        signature_block = "\n\n" + "="*80 + "\n"
+        signature_block += "FIRMAS DIGITALES\n"
+        signature_block += "="*80 + "\n"
+        signature_block += f"ID del Documento: {file_id}\n\n"
+        
+        for idx, sig in enumerate(signatures, 1):
+            signature_block += f"{idx}. Firmante: {sig.signer_id}\n"
+            signature_block += f"   Fecha: {sig.timestamp.strftime('%d/%m/%Y %H:%M:%S')}\n"
+            signature_block += f"   Firma Digital: {sig.signature_data}\n\n"
+        
+        signature_block += "="*80 + "\n"
+        signature_block += f"Total de firmas: {len(signatures)}\n"
+        signature_block += f"Generado: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
+        
+        # Guardar archivo con firmas
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(original_content + signature_block)
+        
+        return True
+    except Exception as e:
+        debug_log(f"Error agregando firmas al TXT: {e}")
+        return False
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+from io import BytesIO
 
 # Configuración desde variables de entorno
 def get_required_env(key: str):
@@ -366,6 +559,217 @@ class ChatManager:
 chat_manager = ChatManager()
 
 # --- Endpoints HTTP ---
+
+# --- Endpoints de Firma Digital ---
+@app.post("/api/upload-file")
+async def upload_file(
+    file: UploadFile = File(...),
+    allowed_signers: str = Form(...),  # JSON stringified list
+    require_all_signers: bool = Form(True),
+    user_id: str = Form(...)
+):
+    """
+    Sube un archivo y define los firmantes permitidos.
+    allowed_signers: JSON string (['user1', 'user2'] o ['all'] o ['admins'])
+    """
+    import json as _json
+    allowed_signers_list = _json.loads(allowed_signers)
+    file_id = str(uuid.uuid4())
+    filename = file.filename
+    file_type = filename.split('.')[-1].lower()
+    save_path = f"uploaded_files/{file_id}_{filename}"
+    os.makedirs("uploaded_files", exist_ok=True)
+    with open(save_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    # Permisos y estado inicial
+    file_permissions[file_id] = {
+        "allowed_signers": allowed_signers_list,
+        "require_all_signers": require_all_signers,
+        "filename": filename,
+        "file_type": file_type,
+        "original_uploader": user_id
+    }
+    file_signature_status[file_id] = FileSignatureStatus(
+        file_id=file_id,
+        original_uploader=user_id,
+        allowed_signers=allowed_signers_list,
+        completed_signers=[],
+        pending_signers=allowed_signers_list.copy(),
+        status="pending"
+    )
+    file_signature_history[file_id] = []
+
+    # Notificar a firmantes (WebSocket)
+    asyncio.create_task(notify_signers_invitation(file_id, filename, user_id, allowed_signers_list))
+
+    return {"file_id": file_id, "filename": filename, "allowed_signers": allowed_signers_list}
+
+
+@app.post("/api/sign-file/{file_id}")
+async def sign_file(file_id: str, signer_id: str = Form(...)):
+    """
+    Permite a un usuario autorizado firmar un archivo.
+    """
+    # Validar permisos
+    perms = file_permissions.get(file_id)
+    if not perms:
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+    allowed = perms["allowed_signers"]
+    if signer_id not in allowed and "all" not in allowed and not ("admins" in allowed and chat_manager.user_info.get(signer_id, {}).get("is_admin")):
+        raise HTTPException(status_code=403, detail="No autorizado para firmar este archivo")
+
+    # Generar firma digital real
+    timestamp = datetime.now()
+    # Crear hash de la firma (SHA-256 del signer_id + timestamp + file_id)
+    signature_hash = hashes.Hash(hashes.SHA256())
+    signature_hash.update(f"{signer_id}{timestamp.isoformat()}{file_id}".encode())
+    signature_data = signature_hash.finalize().hex()
+    
+    action = SignatureAction(
+        file_id=file_id,
+        signer_id=signer_id,
+        timestamp=timestamp,
+        signature_data=signature_data
+    )
+    file_signature_history[file_id].append(action)
+
+    # Actualizar estado
+    status = file_signature_status[file_id]
+    if signer_id not in status.completed_signers:
+        status.completed_signers.append(signer_id)
+    if signer_id in status.pending_signers:
+        status.pending_signers.remove(signer_id)
+    if not status.pending_signers:
+        status.status = "fully_signed"
+    elif status.completed_signers:
+        status.status = "partially_signed"
+    else:
+        status.status = "pending"
+
+    # Agregar firma al archivo físico
+    filename = perms["filename"]
+    file_type = perms["file_type"]
+    original_path = f"uploaded_files/{file_id}_{filename}"
+    signed_path = f"uploaded_files/{file_id}_signed_{filename}"
+    
+    if file_type == "pdf":
+        # Agregar página de firmas al PDF
+        success = add_signature_page_to_pdf(
+            original_path,
+            signed_path,
+            file_signature_history[file_id],
+            file_id
+        )
+        if success:
+            # Reemplazar original con versión firmada
+            os.replace(signed_path, original_path)
+    elif file_type == "txt":
+        # Agregar bloque de firmas al TXT
+        success = add_signatures_to_txt(
+            original_path,
+            signed_path,
+            file_signature_history[file_id],
+            file_id
+        )
+        if success:
+            os.replace(signed_path, original_path)
+
+    # Notificar a participantes (WebSocket)
+    asyncio.create_task(notify_signature_performed(file_id, signer_id, status.pending_signers))
+
+    return {"file_id": file_id, "signed_by": signer_id, "status": status.status, "remaining_signers": status.pending_signers}
+
+@app.get("/api/file-signature-status/{file_id}")
+async def get_file_signature_status(file_id: str):
+    status = file_signature_status.get(file_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+    return status
+
+@app.get("/api/list-files")
+async def list_files(user_id: str = None):
+    """
+    Lista todos los archivos o filtra por usuario.
+    """
+    all_files = []
+    for file_id, perms in file_permissions.items():
+        status = file_signature_status.get(file_id)
+        file_info = {
+            "file_id": file_id,
+            "filename": perms["filename"],
+            "file_type": perms["file_type"],
+            "original_uploader": perms["original_uploader"],
+            "allowed_signers": perms["allowed_signers"],
+            "status": status.status if status else "unknown",
+            "completed_signers": status.completed_signers if status else [],
+            "pending_signers": status.pending_signers if status else []
+        }
+        
+        if user_id:
+            # Filtrar: mostrar si el usuario es uploader o firmante
+            if perms["original_uploader"] == user_id or user_id in perms["allowed_signers"]:
+                all_files.append(file_info)
+        else:
+            all_files.append(file_info)
+    
+    return {"files": all_files}
+
+@app.get("/api/download-file/{file_id}")
+async def download_file(file_id: str):
+    """
+    Descarga o visualiza un archivo.
+    """
+    perms = file_permissions.get(file_id)
+    if not perms:
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+    
+    filename = perms["filename"]
+    file_path = f"uploaded_files/{file_id}_{filename}"
+    
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Archivo físico no encontrado")
+    
+    return FileResponse(
+        path=file_path,
+        filename=filename,
+        media_type="application/octet-stream"
+    )
+
+@app.get("/api/preview-file/{file_id}")
+async def preview_file(file_id: str):
+    """
+    Vista previa de archivo (PDF o TXT) para mostrar en navegador.
+    """
+    perms = file_permissions.get(file_id)
+    if not perms:
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+    
+    filename = perms["filename"]
+    file_type = perms["file_type"]
+    file_path = f"uploaded_files/{file_id}_{filename}"
+    
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Archivo físico no encontrado")
+    
+    # Determinar media type
+    media_type = "application/octet-stream"
+    if file_type == "pdf":
+        media_type = "application/pdf"
+    elif file_type == "txt":
+        media_type = "text/plain; charset=utf-8"
+    
+    return FileResponse(
+        path=file_path,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f"inline; filename={filename}",
+            "X-Frame-Options": "SAMEORIGIN",
+            "Content-Security-Policy": "frame-ancestors 'self'"
+        }
+    )
+
+# --- Endpoints de Admin y Auth ---
 @app.post("/admin/login")
 async def admin_login(request: LoginRequest):
     if request.password != ADMIN_PASSWORD:

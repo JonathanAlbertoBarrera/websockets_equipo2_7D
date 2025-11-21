@@ -4,3 +4,5 @@ websockets==11.0.3
 python-multipart==0.0.6
 python-dotenv==1.0.0
 cryptography==41.0.7
+PyPDF2==3.0.1
+reportlab==4.0.7
