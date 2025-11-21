@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, Lock, Eye, EyeOff } from 'lucide-react';
+import Swal from 'sweetalert2';
 
 const ChatApp = () => {
   // Validar y cargar variables de entorno requeridas
   const getRequiredEnv = (key) => {
     const value = import.meta.env[key];
     if (!value) {
-      const error = `❌ ERROR: Variable de entorno '${key}' no configurada.\n` +
+      const error = ` ERROR: Variable de entorno '${key}' no configurada.\n` +
         `Por favor, configura el archivo .env con todas las variables requeridas.\n` +
         `Consulta .env.example para ver el formato correcto.`;
       console.error(error);
@@ -67,7 +68,6 @@ const ChatApp = () => {
   const [showMyFiles, setShowMyFiles] = useState(false);
   const [previewFile, setPreviewFile] = useState(null);
   const [showPreview, setShowPreview] = useState(false);
-  const [toastMessage, setToastMessage] = useState(null);
   
   // Referencias
   const wsRef = useRef(null);
@@ -88,10 +88,17 @@ const ChatApp = () => {
     scrollToBottom();
   }, [messages]);
 
-  // Sistema de notificaciones toast
+  // Sistema de notificaciones con SweetAlert2
   const showToast = (message, type = 'success') => {
-    setToastMessage({ text: message, type });
-    setTimeout(() => setToastMessage(null), 3000);
+    Swal.fire({
+      title: type === 'success' ? '¡Éxito!' : type === 'error' ? '¡Error!' : 'Información',
+      text: message,
+      icon: type === 'error' ? 'error' : type === 'success' ? 'success' : 'info',
+      confirmButtonText: 'Aceptar',
+      confirmButtonColor: type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#3b82f6',
+      timer: type === 'error' ? undefined : 3000,
+      timerProgressBar: true
+    });
   };
 
   // Traducir estados de firma
@@ -126,7 +133,7 @@ const ChatApp = () => {
 
   // Debug modal de vista previa
   useEffect(() => {
-    debugLog('👀 Estado modal:', { showPreview, previewFile });
+    debugLog(' Estado modal:', { showPreview, previewFile });
   }, [showPreview, previewFile]);
 
   // Función para cambiar el tipo de comunicación en el servidor
@@ -272,7 +279,7 @@ const ChatApp = () => {
             debugLog('⚡ Firma realizada:', message);
             setFileNotifications(prev => [...prev, {
               id: Date.now(),
-              text: `${message.signed_by} firmó: ${message.filename} (${message.status})`,
+              text: `${message.signed_by} firmó: ${message.filename})`,
               fileId: message.file_id
             }]);
             return;
@@ -562,7 +569,7 @@ const ChatApp = () => {
   };
 
   const openPreview = (fileId, filename, fileType) => {
-    debugLog('👁️ Abriendo vista previa:', { fileId, filename, fileType });
+    debugLog(' Abriendo vista previa:', { fileId, filename, fileType });
     // Abrir en nueva pestaña
     const url = `${API_URL}/api/preview-file/${fileId}`;
     window.open(url, '_blank', 'noopener,noreferrer');
@@ -606,7 +613,7 @@ const ChatApp = () => {
                   <>
                     <button
                       onClick={() => setShowAdminLogin(!showAdminLogin)}
-                      className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm flex items-center space-x-1"
+                      className="bg-red-600 hover:bg-red-700 text-black px-3 py-1 rounded text-sm flex items-center space-x-1"
                     >
                       <Lock size={16} />
                       <span>Admin</span>
@@ -666,15 +673,11 @@ const ChatApp = () => {
                 </div>
                 <button
                   onClick={handleAdminLogin}
-                  className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg"
+                  className="bg-red-600 hover:bg-red-700 text-black px-4 py-2 rounded-lg"
                 >
                   Entrar
                 </button>
               </div>
-              {/*
-              <p className="text-sm text-red-600 mt-2">
-                Contraseña por defecto: admin123
-              </p> */}
             </div>
           )}
         </div>
@@ -820,7 +823,7 @@ const ChatApp = () => {
                       <div className="flex space-x-2">
                         <button
                           onClick={() => openPreview(file.file_id, file.filename, file.filename.split('.').pop())}
-                          className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded text-sm"
+                          className="bg-indigo-600 hover:bg-indigo-700 text-black px-3 py-1 rounded text-sm"
                           title="Vista previa"
                         >
                           Ver
@@ -903,17 +906,6 @@ const ChatApp = () => {
           </div>
         </div>
       </div>
-
-      {/* Toast Notification */}
-      {toastMessage && (
-        <div className={`fixed top-4 right-4 z-50 px-6 py-4 rounded-lg shadow-lg transform transition-all duration-300 ${
-          toastMessage.type === 'success' ? 'bg-green-500' :
-          toastMessage.type === 'error' ? 'bg-red-500' :
-          'bg-blue-500'
-        } text-white font-semibold`}>
-          {toastMessage.text}
-        </div>
-      )}
     </div>
   );
 };
